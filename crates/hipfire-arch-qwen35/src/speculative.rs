@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Speculative decoding infrastructure for hipfire.
 //!
 //! Phase 1: holds target + draft model slots side-by-side on a single shared
@@ -468,9 +469,63 @@ pub struct SpecStepResult {
     pub bonus_token: u32,
     /// The full sequence of tokens the draft proposed this cycle.
     pub drafted: Vec<u32>,
-    /// The tokens actually committed to both models: `drafted[..accepted]`
-    /// followed by `bonus_token`. Always non-empty (length = accepted + 1).
+    /// Tokens used to advance the model state. The legacy two-model path
+    /// stores `drafted[..accepted]` followed by `bonus_token`. DFlash paths
+    /// additionally carry the already-emitted seed at index 0 because that
+    /// seed must be replayed into target state; callers emit `committed[1..]`
+    /// in that representation. Use `new_token_count()` for accounting rather
+    /// than inferring newly emitted tokens from this vector's length.
     pub committed: Vec<u32>,
+}
+
+impl SpecStepResult {
+    /// Number of logically new tokens produced by this speculative cycle:
+    /// the accepted draft prefix plus one target bonus token.
+    #[inline]
+    pub fn new_token_count(&self) -> usize {
+        self.accepted + 1
+    }
+}
+
+/// Deterministic greedy decision produced from a batch of draft candidates
+/// and the target's next-token predictions at every verification position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GreedyAcceptancePlan {
+    /// Longest matching prefix of `draft_candidates`.
+    pub accepted: usize,
+    /// Target prediction at the first mismatch, or immediately after the
+    /// final draft candidate when the whole candidate block matches.
+    pub bonus_token: u32,
+}
+
+/// Plan a greedy speculative commit without touching model state.
+///
+/// `target_predictions` must contain one prediction for each candidate plus
+/// one final prediction used as the bonus on full acceptance. The result is
+/// distribution-preserving for deterministic greedy decoding: it commits
+/// only the longest exact candidate prefix and then one token selected by
+/// the target.
+#[inline]
+pub fn plan_greedy_acceptance(
+    draft_candidates: &[u32],
+    target_predictions: &[u32],
+) -> GreedyAcceptancePlan {
+    assert_eq!(
+        target_predictions.len(),
+        draft_candidates.len() + 1,
+        "greedy verification requires one target prediction per draft candidate plus a bonus",
+    );
+
+    let accepted = draft_candidates
+        .iter()
+        .zip(target_predictions.iter())
+        .take_while(|(draft, target)| draft == target)
+        .count();
+
+    GreedyAcceptancePlan {
+        accepted,
+        bonus_token: target_predictions[accepted],
+    }
 }
 
 /// Backing storage for a DeltaNetState snapshot. Holds device buffers sized
@@ -1685,11 +1740,18 @@ impl SpecStats {
 
     pub fn record(&mut self, step: &SpecStepResult) {
         self.cycles += 1;
-        self.committed_tokens += step.committed.len();
+        // DFlash carries the previous cycle's already-emitted seed in
+        // committed[0] for state replay. Count the semantic output contract
+        // (accepted draft prefix + one target bonus), not storage framing.
+        self.committed_tokens += step.new_token_count();
         self.accepted_tokens += step.accepted;
-        if step.accepted < self.acceptance_hist.len() {
-            self.acceptance_hist[step.accepted] += 1;
+        // Adaptive speculation may raise B beyond the initial value used to
+        // construct this accumulator. Preserve those samples instead of
+        // silently dropping their histogram bucket.
+        if step.accepted >= self.acceptance_hist.len() {
+            self.acceptance_hist.resize(step.accepted + 1, 0);
         }
+        self.acceptance_hist[step.accepted] += 1;
     }
 
     /// Mean accepted draft tokens per cycle. This is τ from the Leviathan paper.
@@ -1776,27 +1838,13 @@ pub fn spec_step_greedy(
     // Acceptance:
     //   drafted[0] verified by target_logits_at_pos  (logits at pos)
     //   drafted[i] (i >= 1) verified by target_mid_logits[i-1] (logits at pos+i)
-    let mut accepted: usize = 0;
-    if !target_logits_at_pos.is_empty()
-        && argmax_u32(&target_logits_at_pos) == drafted[0]
-    {
-        accepted = 1;
-        for i in 1..k {
-            if argmax_u32(&target_mid_logits[i - 1]) == drafted[i] {
-                accepted += 1;
-            } else {
-                break;
-            }
-        }
-    }
-
-    // Bonus token = target's prediction at position pos+accepted.
-    let bonus_logits: &[f32] = if accepted == 0 {
-        &target_logits_at_pos
-    } else {
-        &target_mid_logits[accepted - 1]
-    };
-    let bonus_token = argmax_u32(bonus_logits);
+    //   target_mid_logits[k-1] supplies the bonus after full acceptance.
+    let mut target_predictions: Vec<u32> = Vec::with_capacity(k + 1);
+    target_predictions.push(argmax_u32(&target_logits_at_pos));
+    target_predictions.extend(target_mid_logits.iter().map(|logits| argmax_u32(logits)));
+    let plan = plan_greedy_acceptance(&drafted, &target_predictions);
+    let accepted = plan.accepted;
+    let bonus_token = plan.bonus_token;
 
     // Commit = accepted draft prefix + bonus.
     let mut committed: Vec<u32> = Vec::with_capacity(accepted + 1);
@@ -3046,14 +3094,9 @@ pub fn spec_step_dflash(
         } else {
             std::borrow::Cow::Borrowed(verify_out.argmax_per_pos.as_slice())
         };
-        for i in 0..b - 1 {
-            if argmax_per_pos[i] == block[i + 1] {
-                accept_len += 1;
-            } else {
-                break;
-            }
-        }
-        bonus_token = argmax_per_pos[accept_len];
+        let plan = plan_greedy_acceptance(&block[1..], argmax_per_pos.as_ref());
+        accept_len = plan.accepted;
+        bonus_token = plan.bonus_token;
     }
 
     // ── 7b. Seed-prediction oracle (Task #93 Phase B) ───────────────────
@@ -5043,4 +5086,98 @@ pub fn apply_eviction_retain_to_draft(
     // the next draft_forward. One slow cycle per eviction is fine.
     draft_scratch.invalidate_draft_ctx_cache();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        plan_greedy_acceptance, GreedyAcceptancePlan, SpecStats, SpecStepResult,
+    };
+
+    fn committed_from_plan(candidates: &[u32], plan: GreedyAcceptancePlan) -> Vec<u32> {
+        let mut committed = candidates[..plan.accepted].to_vec();
+        committed.push(plan.bonus_token);
+        committed
+    }
+
+    #[test]
+    fn greedy_plan_preserves_target_prefix_for_every_acceptance_shape() {
+        let cases: &[(&[u32], &[u32])] = &[
+            (&[], &[7]),
+            (&[99, 20, 30], &[10, 20, 30, 40]),
+            (&[10, 99, 30], &[10, 20, 30, 40]),
+            (&[10, 20, 99], &[10, 20, 30, 40]),
+            (&[10, 20, 30], &[10, 20, 30, 40]),
+        ];
+
+        for &(candidates, target) in cases {
+            let plan = plan_greedy_acceptance(candidates, target);
+            let committed = committed_from_plan(candidates, plan);
+            assert_eq!(committed, target[..committed.len()]);
+        }
+    }
+
+    #[test]
+    fn greedy_plan_stops_at_first_mismatch() {
+        let plan = plan_greedy_acceptance(&[10, 99, 30], &[10, 20, 30, 40]);
+        assert_eq!(
+            plan,
+            GreedyAcceptancePlan {
+                accepted: 1,
+                bonus_token: 20,
+            }
+        );
+    }
+
+    #[test]
+    fn greedy_plan_uses_post_block_bonus_on_full_acceptance() {
+        let plan = plan_greedy_acceptance(&[10, 20, 30], &[10, 20, 30, 40]);
+        assert_eq!(
+            plan,
+            GreedyAcceptancePlan {
+                accepted: 3,
+                bonus_token: 40,
+            }
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "one target prediction per draft candidate plus a bonus")]
+    fn greedy_plan_rejects_incomplete_target_batch() {
+        let _ = plan_greedy_acceptance(&[10, 20], &[10, 20]);
+    }
+
+    #[test]
+    fn spec_stats_counts_logical_tokens_not_carried_dflash_seed() {
+        let step = SpecStepResult {
+            accepted: 2,
+            bonus_token: 30,
+            drafted: vec![20, 21, 22],
+            // DFlash framing: old seed + two accepted candidates + bonus.
+            committed: vec![10, 20, 21, 30],
+        };
+        let mut stats = SpecStats::new(3);
+        stats.record(&step);
+
+        assert_eq!(step.new_token_count(), 3);
+        assert_eq!(stats.committed_tokens, 3);
+        assert_eq!(stats.tau(), 2.0);
+        assert_eq!(stats.mean_committed(), 3.0);
+    }
+
+    #[test]
+    fn spec_stats_grows_histogram_for_adaptive_block_size() {
+        let step = SpecStepResult {
+            accepted: 4,
+            bonus_token: 50,
+            drafted: vec![10, 20, 30, 40, 41],
+            committed: vec![0, 10, 20, 30, 40, 50],
+        };
+        let mut stats = SpecStats::new(2);
+        stats.record(&step);
+
+        assert_eq!(stats.acceptance_hist.len(), 5);
+        assert_eq!(stats.acceptance_hist[4], 1);
+        assert_eq!(stats.acceptance_hist.iter().sum::<usize>(), stats.cycles);
+    }
 }
