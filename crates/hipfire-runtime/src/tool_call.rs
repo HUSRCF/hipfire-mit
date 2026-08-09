@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Per-arch tool-call output parsers.
 //!
 //! Stage 3 of the Jinja transition: move tool-call parsing out of
@@ -66,6 +67,45 @@ pub trait ToolCallParser: Send + Sync {
 
     /// Diagnostic name for logs.
     fn name(&self) -> &'static str;
+}
+
+/// Return the literal prefix needed before a malformed Hermes `name` value.
+///
+/// Quantized models can occasionally start the first tool name as an
+/// unquoted identifier, for example `{"name": read"}`. This helper is a
+/// deliberately narrow generation-time constraint: it only fires inside an
+/// unclosed `<tool_call>` whose JSON body consists solely of the opening `{`
+/// and first `"name":` key, and only when the proposed value begins like an
+/// identifier instead of a JSON string. The caller must feed the returned
+/// prefix through the model before sampling again; arbitrary malformed JSON
+/// is left untouched for the normal validator to reject.
+pub fn required_hermes_name_quote_prefix(context: &str, candidate: &str) -> Option<String> {
+    const OPEN: &str = "<tool_call>";
+    const CLOSE: &str = "</tool_call>";
+
+    let open = context.rfind(OPEN)?;
+    let body = &context[open + OPEN.len()..];
+    if body.contains(CLOSE) {
+        return None;
+    }
+
+    let body = body.trim_start().strip_prefix('{')?.trim_start();
+    let body = body.strip_prefix("\"name\"")?.trim_start();
+    let body = body.strip_prefix(':')?;
+    if !body.trim().is_empty() {
+        return None;
+    }
+
+    let value = candidate.trim_start();
+    let first = value.chars().next()?;
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return None;
+    }
+
+    let leading_len = candidate.len() - value.len();
+    let mut prefix = candidate[..leading_len].to_string();
+    prefix.push('"');
+    Some(prefix)
 }
 
 // ── Hermes JSON parser ──────────────────────────────────────────────
@@ -501,6 +541,48 @@ mod tests {
         assert_eq!(r.tool_calls.len(), 2);
         assert_eq!(r.tool_calls[0].name, "a");
         assert_eq!(r.tool_calls[1].name, "b");
+    }
+
+    #[test]
+    fn hermes_generation_constraint_quotes_unquoted_first_name() {
+        assert_eq!(
+            required_hermes_name_quote_prefix(
+                "<think></think>\n<tool_call>\n{\"name\":",
+                " read",
+            )
+            .as_deref(),
+            Some(" \"")
+        );
+        assert_eq!(
+            required_hermes_name_quote_prefix("<tool_call>{ \"name\" : ", "read"),
+            Some("\"".to_string())
+        );
+    }
+
+    #[test]
+    fn hermes_generation_constraint_preserves_valid_or_unrelated_output() {
+        assert_eq!(
+            required_hermes_name_quote_prefix("<tool_call>{\"name\":", " \"read\""),
+            None
+        );
+        assert_eq!(
+            required_hermes_name_quote_prefix("plain text {\"name\":", " read"),
+            None
+        );
+        assert_eq!(
+            required_hermes_name_quote_prefix(
+                "<tool_call>{\"name\":\"read\",\"arguments\":",
+                " path",
+            ),
+            None
+        );
+        assert_eq!(
+            required_hermes_name_quote_prefix(
+                "<tool_call>{\"name\":</tool_call>",
+                " read",
+            ),
+            None
+        );
     }
 
     // ── Qwen3.5/3.6 XML parser ────────────────────────────────────

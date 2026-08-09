@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Agentic gate - tool-call shape regression battery for A3B variants.
 #
 # Why this gate exists:
@@ -45,6 +46,8 @@
 #   - HIPFIRE_AGENTIC_GATE_NO_VRAM_CHECK=1 -> bypass VRAM-headroom skip
 #                                            (e.g., registry minimums too conservative
 #                                            for your host)
+#   - HIPFIRE_AGENTIC_GATE_KEEP_OUTPUT=1 -> retain raw daemon JSONL beside
+#                                            the Markdown report for diagnosis
 #
 # Report destination: /tmp/agentic-gate-<timestamp>.md (or $HIPFIRE_AGENTIC_GATE_OUT)
 
@@ -261,6 +264,7 @@ if [ ! -x "$EXE" ]; then
 else
     for src in crates/hipfire-arch-qwen35/src/qwen35.rs crates/hipfire-runtime/src/llama.rs \
                crates/hipfire-runtime/src/hfq.rs crates/hipfire-runtime/examples/daemon.rs \
+               crates/hipfire-runtime/src/tool_call.rs \
                crates/rdna-compute/src/dispatch.rs; do
         if [ -f "$src" ] && [ "$src" -nt "$EXE" ]; then
             rebuild=1; break
@@ -691,7 +695,13 @@ PY
     # Read per-model summary written to stderr by the python detector.
     # (We didn't capture stderr above; instead recompute by running a thin checker.)
     # For simplicity, re-run a quick aggregator from the report file.
-    rm -f "$OUTPUT_FILE"
+    if [ "${HIPFIRE_AGENTIC_GATE_KEEP_OUTPUT:-0}" = "1" ]; then
+        kept_output="${OUT%.md}-${model_short}-raw.jsonl"
+        mv "$OUTPUT_FILE" "$kept_output"
+        echo "agentic-gate: raw daemon output kept at $kept_output"
+    else
+        rm -f "$OUTPUT_FILE"
+    fi
 done
 
 # ---- Aggregate verdict -----------------------------------------------------

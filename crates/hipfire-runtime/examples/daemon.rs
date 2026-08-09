@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! hipfire engine daemon — JSON lines over stdin/stdout.
 //! The Bun CLI spawns this process and communicates via IPC.
 //! Usage: daemon (reads JSON from stdin, writes JSON to stdout)
@@ -28,6 +29,7 @@ use hipfire_arch_qwen35::qwen35;
 use hipfire_arch_qwen35::qwen35::{DeltaNetState, LayerType, Qwen35ScratchSet};
 use hipfire_arch_qwen35_vl::qwen35_vl;
 use hipfire_runtime::sampler::{self, SamplerConfig};
+use hipfire_runtime::tool_call::required_hermes_name_quote_prefix;
 use hipfire_arch_qwen35::speculative::{
     self, DdtreeScratch, DeltaNetSnapshot, GdnTape, HiddenStateRingBuffer, VerifyScratch,
 };
@@ -3650,6 +3652,11 @@ fn generate(m: &mut LoadedModel, gpu: &mut rdna_compute::Gpu, stdout: &mut std::
         let mut bytes_fed_to_filter = 0usize;
         let mut filter = EosFilter::new(EosFilterConfig::default());
         let mut alert_fired = false;
+        // Prefix tokens injected by the narrow Hermes JSON name constraint.
+        // A queue keeps the mechanism tokenizer-independent when ` \"` is
+        // represented by more than one token.
+        let mut forced_tool_prefix = std::collections::VecDeque::<u32>::new();
+        let mut tool_call_depth = 0usize;
         // max_think_tokens enforcement state. think_count increments only
         // while we observe ourselves to be inside a `<think>...</think>`
         // block via the same decoded-text scan budget_alert uses. When the
@@ -3675,9 +3682,34 @@ fn generate(m: &mut LoadedModel, gpu: &mut rdna_compute::Gpu, stdout: &mut std::
         // (which increments `generated` beyond the iteration count) can't
         // push generated past max_tokens: each loop start rechecks the cap.
         while generated < max_tokens {
+            if let Some(forced) = forced_tool_prefix.pop_front() {
+                next_token = forced;
+            } else if tool_call_depth > 0 {
+                let context = tokenizer.decode(&streamed_tokens);
+                let candidate_bytes = tokenizer.decode_bytes(&[next_token]);
+                if let Ok(candidate) = std::str::from_utf8(&candidate_bytes) {
+                    if let Some(prefix) =
+                        required_hermes_name_quote_prefix(&context, candidate)
+                    {
+                        let prefix_tokens = tokenizer.encode(&prefix);
+                        if !prefix_tokens.is_empty() && tokenizer.decode(&prefix_tokens) == prefix
+                        {
+                            next_token = prefix_tokens[0];
+                            forced_tool_prefix.extend(prefix_tokens.into_iter().skip(1));
+                        }
+                    }
+                }
+            }
             generated += 1;
             m.conversation_tokens.push(next_token);
             streamed_tokens.push(next_token);
+            if let Some((tool_open, tool_close)) = tool_call_pair {
+                if next_token == tool_open {
+                    tool_call_depth += 1;
+                } else if next_token == tool_close {
+                    tool_call_depth = tool_call_depth.saturating_sub(1);
+                }
+            }
             emit_committed_event(stdout, id, next_token, streamed_tokens.len() - 1, t0.elapsed().as_millis() as u64);
             // Incremental UTF-8 + filter routing: feed only the new
             // bytes since last call, let the filter buffer any partial
