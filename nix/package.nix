@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 { lib
 , rustPlatform
 , rocmPackages
@@ -22,7 +23,7 @@ rustPlatform.buildRustPackage {
   # The main binaries are cargo [[example]] targets, not [[bin]].
   buildPhase = ''
     runHook preBuild
-    cargo build --release --features deltanet \
+    cargo build --release --locked --features deltanet \
       --example daemon --example infer --example infer_hfq \
       -p hipfire-runtime
     runHook postBuild
@@ -82,7 +83,7 @@ rustPlatform.buildRustPackage {
 
   meta = with lib; {
     description = "LLM inference for AMD RDNA GPUs";
-    homepage = "https://github.com/Kaden-Schutt/hipfire";
+    homepage = "https://github.com/HUSRCF/hipfire-mit";
     license = licenses.mit;
     platforms = [ "x86_64-linux" ];
     mainProgram = "hipfire";

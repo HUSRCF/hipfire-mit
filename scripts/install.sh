@@ -357,7 +357,7 @@ else
         exit 1
     fi
     RESOLVED_COMMIT=$(git -C "$SRC_DIR" rev-parse --verify FETCH_HEAD)
-    git -C "$SRC_DIR" reset --hard "$RESOLVED_COMMIT"
+    git -C "$SRC_DIR" checkout --detach --force "$RESOLVED_COMMIT"
     echo "  Source commit: $RESOLVED_COMMIT ✓"
     REPO_DIR="$SRC_DIR"
 fi

@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: MIT -->
 # Getting started
 
 ## Install
@@ -5,26 +6,26 @@
 Linux with ROCm 6+ installed and an AMD RDNA GPU:
 
 ```bash
-curl -L https://raw.githubusercontent.com/Kaden-Schutt/hipfire/master/scripts/install.sh | bash
+curl -L https://raw.githubusercontent.com/HUSRCF/hipfire-mit/main/scripts/install.sh | bash
 ```
 
 The installer detects your GPU arch (`gfx1010` / `gfx1030` / `gfx1100` / etc.),
-fetches matching pre-compiled kernel blobs, drops the daemon and quantizer
-binaries into `~/.hipfire/bin/`, and adds a wrapper to `~/.local/bin/`. Make
-sure `~/.local/bin` is on your `PATH`.
+builds the lockfile-pinned source checkout, prepares matching kernels, and
+installs the daemon and CLI under `~/.hipfire/`.
 
 For Windows (native, with the AMD HIP SDK):
 
 ```powershell
-irm https://raw.githubusercontent.com/Kaden-Schutt/hipfire/master/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/HUSRCF/hipfire-mit/main/scripts/install.ps1 | iex
 ```
 
-The installer detects your AMD GPU via `Win32_VideoController`, downloads
-the prebuilt `daemon.exe` from the latest GitHub release, sets up the
-`bun`-based CLI, and runs `daemon.exe --precompile` to JIT-compile kernels
-for your arch into `~\.hipfire\bin\kernels\compiled\<arch>\`. This requires
-the [AMD HIP SDK](https://www.amd.com/en/developer/resources/rocm-hub/hip-sdk.html)
-to be installed (provides `hipcc.bat` + `amdhip64.dll`).
+The installer detects your AMD GPU via `Win32_VideoController`, builds the
+lockfile-pinned checkout, sets up the `bun`-based CLI, and runs
+`daemon.exe --precompile` to JIT-compile kernels for your arch into
+`~\.hipfire\bin\kernels\compiled\<arch>\`. This requires the
+[AMD HIP SDK](https://www.amd.com/en/developer/resources/rocm-hub/hip-sdk.html)
+to be installed (provides `hipcc.bat` + `amdhip64.dll`); the installer does
+not download runtime DLLs from project releases.
 
 If hipcc is not available, kernels can still load from any prebuilt blobs
 in the repo. To force a fresh compile of the full kernel set:
@@ -40,11 +41,21 @@ above.
 For source builds:
 
 ```bash
-git clone https://github.com/Kaden-Schutt/hipfire
-cd hipfire
-cargo build --release --features deltanet --example daemon -p hipfire-runtime
-cargo build --release -p hipfire-quantize
+git clone https://github.com/HUSRCF/hipfire-mit
+cd hipfire-mit
+cargo build --release --locked --features deltanet --example daemon -p hipfire-runtime
+cargo build --release --locked -p hipfire-quantize
 ```
+
+To reproduce an exact remote install, pin a full commit. The installer records
+the requested ref and resolved commit in `~/.hipfire/install-source.txt`:
+
+```bash
+curl -L https://raw.githubusercontent.com/HUSRCF/hipfire-mit/main/scripts/install.sh \
+  | HIPFIRE_INSTALL_REF=<40-character-commit> bash
+```
+
+On PowerShell, set `$env:HIPFIRE_INSTALL_REF` before invoking `install.ps1`.
 
 ## Verify
 

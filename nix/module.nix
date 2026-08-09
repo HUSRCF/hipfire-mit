@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 { config, lib, pkgs, ... }:
 
 let
@@ -92,20 +93,20 @@ in
     github = {
       owner = lib.mkOption {
         type = lib.types.str;
-        default = "Kaden-Schutt";
+        default = "HUSRCF";
         description = "GitHub repository owner.";
       };
 
       repo = lib.mkOption {
         type = lib.types.str;
-        default = "hipfire";
+        default = "hipfire-mit";
         description = "GitHub repository name.";
       };
 
       rev = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        example = "master";
+        example = "main";
         description = ''
           Git revision to build from (branch name, tag, or commit hash).
           When set, fetches the source from GitHub instead of using the

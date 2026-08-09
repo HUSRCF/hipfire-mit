@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # amd_quickdeploy.sh — one-shot bring-up for a fresh rented AMD GPU box
 # (MI300X/MI250X/MI210/Radeon VII Pro/V620/etc). Idempotent: safe to re-run.
 #
@@ -33,9 +34,9 @@
 
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/Kaden-Schutt/hipfire.git}"
+REPO_URL="${REPO_URL:-https://github.com/HUSRCF/hipfire-mit.git}"
 REPO_DIR="${REPO_DIR:-/root/hipfire}"
-REPO_BRANCH="${REPO_BRANCH:-dflash}"
+REPO_BRANCH="${REPO_BRANCH:-main}"
 VENV_DIR="${VENV_DIR:-/root/pytorch_env}"
 SKIP_BUILD=0
 SKIP_HF=0
@@ -168,8 +169,9 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
     rm -rf .hipfire_kernels "$HOME/.hipfire/bin/kernels/compiled" 2>/dev/null || true
 
     export HIPFIRE_FP16=0
+    log "source commit: $(git rev-parse HEAD)"
     log "building hipfire (release, deltanet)..."
-    cargo build --release --features deltanet --examples 2>&1 | tail -5
+    cargo build --release --locked --features deltanet --examples 2>&1 | tail -5
     log "build done — key binaries under $REPO_DIR/target/release/examples/"
 fi
 

@@ -1,5 +1,6 @@
-# hipfire installer for Windows — detects GPU, installs deps, downloads binary + kernels.
-# Usage: irm https://raw.githubusercontent.com/Kaden-Schutt/hipfire/master/scripts/install.ps1 | iex
+# SPDX-License-Identifier: MIT
+# hipfire installer for Windows — detects GPU and builds locked source + kernels.
+# Usage: irm https://raw.githubusercontent.com/HUSRCF/hipfire-mit/main/scripts/install.ps1 | iex
 $ErrorActionPreference = "Stop"
 
 # ─── Paths ───────────────────────────────────────────────
@@ -9,9 +10,13 @@ $RuntimeDir  = "$HipfireDir\runtime"
 $ModelsDir   = "$HipfireDir\models"
 $SrcDir      = "$HipfireDir\src"
 
-# ─── Constants ───────────────────────────────────────────
-$GithubRepo   = "Kaden-Schutt/hipfire"
-$GithubBranch = "master"
+# ─── Source provenance ───────────────────────────────────
+$GithubRepo = $env:HIPFIRE_GITHUB_REPO
+if ([string]::IsNullOrWhiteSpace($GithubRepo)) { $GithubRepo = "HUSRCF/hipfire-mit" }
+$GithubRef = $env:HIPFIRE_INSTALL_REF
+if ([string]::IsNullOrWhiteSpace($GithubRef)) { $GithubRef = "main" }
+$GithubUrl = $env:HIPFIRE_GITHUB_URL
+if ([string]::IsNullOrWhiteSpace($GithubUrl)) { $GithubUrl = "https://github.com/$GithubRepo.git" }
 
 Write-Host "=== hipfire installer ===" -ForegroundColor Cyan
 Write-Host ""
@@ -118,26 +123,18 @@ if (-not $HipDllFound) {
     }
 }
 
-# Attempt download from GitHub release
+# Do not download a mutable or unauthenticated runtime DLL from a project
+# release. The HIP runtime must come from the user's AMD installation.
 if (-not $HipDllFound) {
-    Write-Host "  amdhip64.dll: not found locally. Downloading from GitHub release..." -ForegroundColor Yellow
-    $DllUrl = "https://github.com/$GithubRepo/releases/download/hip-runtime/amdhip64.dll"
-    try {
-        Invoke-WebRequest -Uri $DllUrl -OutFile $HipDllDest -UseBasicParsing
-        Write-Host "  amdhip64.dll: downloaded ✓" -ForegroundColor Green
-        $HipDllFound = $true
-    } catch {
-        Write-Host "  amdhip64.dll: download failed: $_" -ForegroundColor Red
-        Write-Host ""
-        Write-Host "  hipfire needs amdhip64.dll to run. Install ROCm for Windows manually:" -ForegroundColor Yellow
-        Write-Host "    https://rocm.docs.amd.com/en/latest/deploy/windows/quick_start.html"
-        Write-Host "  Or place amdhip64.dll in: $RuntimeDir"
-        Write-Host ""
-        $reply = Read-Host "  Continue without HIP runtime? [y/N]"
-        if ($reply -notmatch "^[Yy]$") {
-            Write-Host "Exiting. Re-run after installing ROCm." -ForegroundColor Red
-            exit 1
-        }
+    Write-Host "  amdhip64.dll: not found in the installed AMD HIP SDK." -ForegroundColor Red
+    Write-Host "  Install ROCm for Windows from AMD:" -ForegroundColor Yellow
+    Write-Host "    https://rocm.docs.amd.com/en/latest/deploy/windows/quick_start.html"
+    Write-Host "  Or place your locally installed amdhip64.dll in: $RuntimeDir"
+    Write-Host ""
+    $reply = Read-Host "  Continue without HIP runtime? [y/N]"
+    if ($reply -notmatch "^[Yy]$") {
+        Write-Host "Exiting. Re-run after installing ROCm." -ForegroundColor Red
+        exit 1
     }
 }
 
@@ -224,186 +221,89 @@ if (-not (Test-Path "$SrcDir\.git")) {
         Write-Host "  ERROR: git is required. Install from https://git-scm.com and re-run." -ForegroundColor Red
         exit 1
     }
-    Write-Host "  Cloning https://github.com/$GithubRepo.git ..."
-    try {
-        git clone --depth 1 --branch $GithubBranch "https://github.com/$GithubRepo.git" $SrcDir
-        Write-Host "  Cloned ✓" -ForegroundColor Green
-    } catch {
-        Write-Host "  Clone failed: $_" -ForegroundColor Red
-        Write-Host "  Try manually: git clone https://github.com/$GithubRepo.git $SrcDir"
+    Write-Host "  Cloning $GithubUrl ..."
+    & git clone --filter=blob:none --no-checkout $GithubUrl $SrcDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  Clone failed." -ForegroundColor Red
+        Write-Host "  Try manually: git clone $GithubUrl $SrcDir"
         exit 1
     }
+    Write-Host "  Cloned ✓" -ForegroundColor Green
 } else {
     Write-Host "  Existing clone found at $SrcDir"
     $status = & git -C $SrcDir status --porcelain 2>&1 | Out-String
     if ($status.Trim()) {
-        Write-Host "  WARNING: local modifications detected." -ForegroundColor Yellow
-        $reply = Read-Host "  Overwrite local changes and update? [y/N]"
+        Write-Host "  Local modifications detected." -ForegroundColor Yellow
+        $reply = Read-Host "  Stash local changes and install the requested ref? [y/N]"
         if ($reply -match "^[Yy]$") {
-            try {
-                & git -C $SrcDir fetch origin $GithubBranch --depth 1 2>&1 | Out-Null
-                & git -C $SrcDir reset --hard "origin/$GithubBranch" 2>&1 | Out-Null
-                Write-Host "  Updated ✓" -ForegroundColor Green
-            } catch {
-                Write-Host "  Update failed (non-fatal)." -ForegroundColor Yellow
+            $stamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH-mm-ssZ")
+            $stashMsg = "hipfire-install-$stamp"
+            & git -C $SrcDir stash push --include-untracked -m $stashMsg 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "  git stash failed; aborting without resetting." -ForegroundColor Red
+                exit 1
             }
+            Write-Host "  Recover later with: git -C $SrcDir stash pop" -ForegroundColor Yellow
         } else {
-            Write-Host "  Keeping existing checkout." -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host "  Updating..."
-        try {
-            $env:GIT_TERMINAL_PROMPT = "0"
-            & git -C $SrcDir fetch origin $GithubBranch --depth 1 2>&1 | Out-Null
-            & git -C $SrcDir reset --hard "origin/$GithubBranch" 2>&1 | Out-Null
-            Write-Host "  Updated ✓" -ForegroundColor Green
-        } catch {
-            Write-Host "  Update failed (non-fatal). Using existing checkout." -ForegroundColor Yellow
+            Write-Host "  Aborting so the existing checkout remains unchanged." -ForegroundColor Yellow
+            exit 1
         }
     }
+    & git -C $SrcDir remote set-url origin $GithubUrl
+    if ($LASTEXITCODE -ne 0) { throw "failed to set clean-room source URL" }
 }
 
+$env:GIT_TERMINAL_PROMPT = "0"
+Write-Host "  Fetching ref $GithubRef ..."
+& git -C $SrcDir fetch origin $GithubRef --depth 1
+if ($LASTEXITCODE -ne 0) { throw "could not fetch '$GithubRef' from $GithubUrl" }
+$ResolvedCommit = (& git -C $SrcDir rev-parse --verify FETCH_HEAD 2>$null | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($ResolvedCommit)) {
+    throw "could not resolve fetched ref '$GithubRef'"
+}
+& git -C $SrcDir checkout --detach --force $ResolvedCommit 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "failed to check out source commit $ResolvedCommit" }
+Write-Host "  Source commit: $ResolvedCommit ✓" -ForegroundColor Green
+
 $RepoDir = $SrcDir
+$Provenance = "repository=$GithubUrl`nrequested_ref=$GithubRef`nresolved_commit=$ResolvedCommit`n"
+[System.IO.File]::WriteAllText("$HipfireDir\install-source.txt", $Provenance)
+Write-Host "  Install provenance: $HipfireDir\install-source.txt" -ForegroundColor Green
 
 # ─── Build / install binaries ────────────────────────────
 Write-Host ""
 Write-Host "Installing hipfire binaries..." -ForegroundColor Cyan
 
-# Resolve cargo's actual target directory. Honors CARGO_TARGET_DIR and any
-# workspace target overrides — without this, users with a shared target
-# directory (common when juggling several Rust projects) would see install
-# fail because the binaries we expect at $RepoDir\target\... actually live
-# elsewhere. Falls back to the conventional location when cargo is not yet
-# installed, since pre-built binaries can only sit at the default path in
-# that case.
-$TargetDir = "$RepoDir\target"
-if (Get-Command cargo -ErrorAction SilentlyContinue) {
-    try {
-        $Meta = cargo metadata --format-version 1 --manifest-path "$RepoDir\Cargo.toml" 2>$null | ConvertFrom-Json
-        if ($Meta.target_directory) { $TargetDir = $Meta.target_directory }
-    } catch {}
+# Build the selected checkout from Cargo.lock. Always invoking Cargo validates
+# that cached artifacts match this source commit while retaining incremental
+# compilation when they do.
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    Write-Host "  Installing Rust via rustup..." -ForegroundColor Yellow
+    $RustupUrl = "https://win.rustup.rs/x86_64"
+    $RustupExe = "$env:TEMP\rustup-init.exe"
+    Invoke-WebRequest -Uri $RustupUrl -OutFile $RustupExe -UseBasicParsing
+    & $RustupExe -y --default-toolchain stable
+    if ($LASTEXITCODE -ne 0) { throw "rustup installation failed" }
+    $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 }
 
-# Source preference order — the prior install's $BinDir\daemon.exe is NOT
-# a source. Including it would re-use stale binaries forever. The repo-side
-# paths (only meaningful when running install.ps1 from a checkout) are
-# treated as developer-authoritative and used if present; everyone else
-# always pulls the latest release asset.
-$PreBuilt = @(
-    "$TargetDir\release\examples\daemon.exe",
-    "$RepoDir\bin\daemon.exe"
-) | Where-Object { Test-Path $_ } | Select-Object -First 1
-
-if (-not $PreBuilt) {
-    # Query the latest GitHub release dynamically — never pin to an old tag.
-    # If the latest release has a daemon.exe asset, use it; otherwise fall
-    # through to the source-build path below. This way every Windows install
-    # tracks current master without requiring a script bump per release.
-    Write-Host "  Querying latest GitHub release..."
-    try {
-        $LatestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/$GithubRepo/releases/latest" -UseBasicParsing
-        $DaemonAsset = $LatestRelease.assets | Where-Object { $_.name -eq "daemon.exe" } | Select-Object -First 1
-        if ($DaemonAsset) {
-            $ReleaseDest = "$BinDir\daemon.exe"
-            # Cache discipline: store the asset id (immutable per upload) of
-            # whatever we last downloaded as a sidecar. Refresh whenever the
-            # current asset id differs — catches both new tags and re-uploaded
-            # binaries on the same tag. Size-only matching was insufficient
-            # because two builds can share a byte count.
-            $StampPath = "$BinDir\daemon.exe.release-id"
-            $CurrentAssetId = "$($DaemonAsset.id)"
-            $NeedsDownload = $true
-            if ((Test-Path $ReleaseDest) -and (Test-Path $StampPath)) {
-                $StoredAssetId = (Get-Content $StampPath -Raw -ErrorAction SilentlyContinue).Trim()
-                if ($StoredAssetId -eq $CurrentAssetId) {
-                    Write-Host "  daemon.exe already at latest release $($LatestRelease.tag_name) (asset id $CurrentAssetId) — keeping" -ForegroundColor Green
-                    $PreBuilt = $ReleaseDest
-                    $NeedsDownload = $false
-                } else {
-                    Write-Host "  daemon.exe is stale (local id $StoredAssetId, latest id $CurrentAssetId) — refreshing" -ForegroundColor Yellow
-                }
-            } elseif (Test-Path $ReleaseDest) {
-                Write-Host "  daemon.exe present but no release-id stamp — refreshing to be safe" -ForegroundColor Yellow
-            }
-            if ($NeedsDownload) {
-                Write-Host "  Pulling daemon.exe from release $($LatestRelease.tag_name)..." -ForegroundColor Cyan
-                $TempDest = "$ReleaseDest.download"
-                try {
-                    # Stage to a temp file so a partial / failed download
-                    # doesn't corrupt the existing daemon.exe.
-                    Invoke-WebRequest -Uri $DaemonAsset.browser_download_url -OutFile $TempDest -UseBasicParsing
-                    if ((Get-Item $TempDest).Length -ne $DaemonAsset.size) {
-                        Remove-Item $TempDest -Force -ErrorAction SilentlyContinue
-                        throw "downloaded size mismatch (got $((Get-Item $TempDest).Length), expected $($DaemonAsset.size))"
-                    }
-                    Move-Item -Path $TempDest -Destination $ReleaseDest -Force
-                    Set-Content -Path $StampPath -Value $CurrentAssetId -NoNewline
-                    $PreBuilt = $ReleaseDest
-                    Write-Host "  Downloaded ✓" -ForegroundColor Green
-                } catch {
-                    Remove-Item $TempDest -Force -ErrorAction SilentlyContinue
-                    Write-Host "  Download failed: $_" -ForegroundColor Yellow
-                    Write-Host "  Existing daemon.exe (if any) is unchanged. Falling through to source build." -ForegroundColor Yellow
-                }
-            }
-        } else {
-            Write-Host "  No daemon.exe in release $($LatestRelease.tag_name) — falling through to source build" -ForegroundColor Yellow
-        }
-    } catch {
-        Write-Host "  Could not query GitHub release API: $_ — falling through to source build" -ForegroundColor Yellow
-    }
+Write-Host "  cargo build --release --locked (this may take several minutes)..."
+Push-Location $RepoDir
+try {
+    & cargo build --release --locked --features deltanet --example daemon --example infer --example infer_hfq -p hipfire-runtime
+    if ($LASTEXITCODE -ne 0) { throw "locked source build failed" }
+} finally {
+    Pop-Location
 }
 
-if ($PreBuilt -and $PreBuilt -ne "$BinDir\daemon.exe") {
-    Copy-Item $PreBuilt "$BinDir\daemon.exe" -Force
-    Write-Host "  daemon.exe installed ✓" -ForegroundColor Green
-} elseif ($PreBuilt) {
-    Write-Host "  daemon.exe ready ✓" -ForegroundColor Green
-} else {
-    Write-Host "  No pre-built binaries available. Building from source..." -ForegroundColor Yellow
-
-    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-        Write-Host "  Installing Rust via rustup..." -ForegroundColor Yellow
-        $RustupUrl  = "https://win.rustup.rs/x86_64"
-        $RustupExe  = "$env:TEMP\rustup-init.exe"
-        Invoke-WebRequest -Uri $RustupUrl -OutFile $RustupExe -UseBasicParsing
-        & $RustupExe -y --default-toolchain stable
-        # Add cargo to PATH for this session
-        $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
-    }
-
-    Write-Host "  cargo build --release (this may take several minutes)..."
-    Push-Location $RepoDir
-    try {
-        cargo build --release --features deltanet --example daemon --example infer --example infer_hfq -p hipfire-runtime
-    } finally {
-        Pop-Location
-    }
-
-    # Re-resolve TargetDir now that cargo is guaranteed available — covers the
-    # case where rustup was just installed above and the initial probe fell
-    # back to the default path.
-    try {
-        $Meta = cargo metadata --format-version 1 --manifest-path "$RepoDir\Cargo.toml" 2>$null | ConvertFrom-Json
-        if ($Meta.target_directory) { $TargetDir = $Meta.target_directory }
-    } catch {}
-
-    $BuiltExe = "$TargetDir\release\examples\daemon.exe"
-    if (-not (Test-Path $BuiltExe)) {
-        Write-Host ""
-        Write-Host "  BUILD FAILED." -ForegroundColor Red
-        Write-Host "  Common causes:"
-        Write-Host "    - Missing ROCm SDK (needed to compile)"
-        Write-Host "    - Missing Visual C++ build tools"
-        Write-Host ""
-        Write-Host "  After fixing, re-run this installer or build manually:"
-        Write-Host "    cd $RepoDir"
-        Write-Host "    cargo build --release --features deltanet --example daemon -p hipfire-runtime"
-        exit 1
-    }
-    Copy-Item $BuiltExe "$BinDir\daemon.exe" -Force
-    Write-Host "  Build complete ✓" -ForegroundColor Green
+$Meta = cargo metadata --locked --format-version 1 --manifest-path "$RepoDir\Cargo.toml" 2>$null | ConvertFrom-Json
+$TargetDir = $Meta.target_directory
+$BuiltExe = "$TargetDir\release\examples\daemon.exe"
+if (-not (Test-Path $BuiltExe)) {
+    throw "build completed without expected daemon at $BuiltExe"
 }
+Copy-Item $BuiltExe "$BinDir\daemon.exe" -Force
+Write-Host "  Build complete ✓" -ForegroundColor Green
 
 # Copy optional helper binaries if present
 foreach ($exe in @("infer.exe", "infer_hfq.exe")) {

@@ -1,6 +1,7 @@
+# SPDX-License-Identifier: MIT
 # hipfire force-update — clean reinstall preserving models only.
 # Config is regenerated fresh (ensures correct GPU arch detection).
-# Usage: irm https://raw.githubusercontent.com/Kaden-Schutt/hipfire/master/scripts/force-update.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/HUSRCF/hipfire-mit/main/scripts/force-update.ps1 | iex
 
 $HipfireDir = "$env:USERPROFILE\.hipfire"
 $BackupDir = "$env:USERPROFILE\.hipfire-backup"
@@ -23,7 +24,11 @@ if (Test-Path $HipfireDir) {
 # Run fresh installer
 Write-Host ""
 Write-Host "Running fresh install..." -ForegroundColor Cyan
-irm https://raw.githubusercontent.com/Kaden-Schutt/hipfire/master/scripts/install.ps1 | iex
+$InstallRef = $env:HIPFIRE_INSTALL_REF
+if ([string]::IsNullOrWhiteSpace($InstallRef)) { $InstallRef = "main" }
+$InstallRepo = $env:HIPFIRE_GITHUB_REPO
+if ([string]::IsNullOrWhiteSpace($InstallRepo)) { $InstallRepo = "HUSRCF/hipfire-mit" }
+irm "https://raw.githubusercontent.com/$InstallRepo/$InstallRef/scripts/install.ps1" | iex
 
 # Restore user data
 if (Test-Path $BackupDir) {

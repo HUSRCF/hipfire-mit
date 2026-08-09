@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: MIT -->
 # NixOS
 
 hipfire has first-class NixOS support via a Nix flake.
@@ -23,23 +24,23 @@ Detect your GPU architecture:
 
 Enter a shell with Rust, bun, hipcc, and ROCm tools:
 
-    nix develop github:Kaden-Schutt/hipfire
+    nix develop github:HUSRCF/hipfire-mit
 
 This works with any hipfire checkout — the shell provides tools only,
 not the source tree:
 
-    nix develop github:Kaden-Schutt/hipfire
+    nix develop github:HUSRCF/hipfire-mit
     cd ~/my-hipfire-fork
-    cargo build --release --features deltanet --example daemon -p hipfire-runtime
+    cargo build --release --locked --features deltanet --example daemon -p hipfire-runtime
 
 ### Build from source
 
-    nix build github:Kaden-Schutt/hipfire
+    nix build github:HUSRCF/hipfire-mit
     ./result/bin/hipfire run qwen3.5:9b "Hello"
 
 ### Build kernels
 
-    nix build github:Kaden-Schutt/hipfire#hipfire-kernels
+    nix build github:HUSRCF/hipfire-mit#hipfire-kernels
 
 ## NixOS Module
 
@@ -52,7 +53,7 @@ Add hipfire to your flake inputs and enable the service.
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
-    hipfire.url = "github:Kaden-Schutt/hipfire";
+    hipfire.url = "github:HUSRCF/hipfire-mit";
   };
 
   outputs = { nixpkgs, hipfire, ... }: {
