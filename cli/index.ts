@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// SPDX-License-Identifier: MIT
 // hipfire CLI — ollama-style UX for AMD GPU inference
 // Usage:
 //   hipfire pull qwen3.5:9b          → download model
@@ -4457,21 +4458,34 @@ switch (cmd) {
         process.exit(1);
       }
     };
-    // Refuse to auto-reset when on a feature branch: `hipfire update` is for
-    // end-users syncing master, not for developers working off a dev branch.
+    const provenancePath = join(HIPFIRE_DIR, "install-source.txt");
+    let updateRef = (process.env.HIPFIRE_INSTALL_REF || "").trim();
+    if (!updateRef && existsSync(provenancePath)) {
+      try {
+        const provenance = await Bun.file(provenancePath).text();
+        updateRef = provenance.match(/^requested_ref=(.+)$/m)?.[1]?.trim() || "";
+      } catch {}
+    }
+    if (!updateRef) updateRef = "main";
+
+    // Refuse to auto-reset when on an unrelated feature branch. A detached
+    // checkout is valid when the installer was pinned to an immutable commit.
     const branch = gitOut(["rev-parse", "--abbrev-ref", "HEAD"]);
-    if (branch.code === 0 && branch.out && branch.out !== "master" && branch.out !== "HEAD") {
-      console.error(`  Current branch is '${branch.out}', not master.`);
-      console.error(`  'hipfire update' only updates master. Run 'git pull' manually for other branches.`);
+    if (branch.code === 0 && branch.out && branch.out !== updateRef && branch.out !== "HEAD") {
+      console.error(`  Current branch is '${branch.out}', not requested ref '${updateRef}'.`);
+      console.error("  Run 'git pull' manually for developer branches, or set HIPFIRE_INSTALL_REF explicitly.");
       process.exit(1);
     }
-    // Fetch upstream master. Works on shallow clones (extends depth as needed).
-    must(git(["fetch", "origin", "master"]).exitCode, "git fetch origin master failed (check network / remote access)");
-    // Refuse to silently drop unpushed local commits on master. Developers
-    // working directly on master need to push (or rebase) before updating.
-    const ahead = gitOut(["rev-list", "--count", "origin/master..HEAD"]);
+    // Fetch the requested branch, tag, or commit and immediately resolve
+    // FETCH_HEAD. This supports immutable install pins as well as `main`.
+    must(git(["fetch", "origin", updateRef]).exitCode, `git fetch origin ${updateRef} failed (check network / remote access)`);
+    const fetched = gitOut(["rev-parse", "--verify", "FETCH_HEAD"]);
+    must(fetched.code, "could not resolve fetched install ref");
+    // Refuse to silently drop unpushed local commits. Developers working
+    // directly on the install checkout need to push or rebase first.
+    const ahead = gitOut(["rev-list", "--count", `${fetched.out}..HEAD`]);
     if (ahead.code === 0 && parseInt(ahead.out || "0", 10) > 0) {
-      console.error(`  Local master has ${ahead.out} unpushed commit(s) — refusing to reset.`);
+      console.error(`  Local checkout has ${ahead.out} unpushed commit(s) — refusing to reset.`);
       console.error(`  Push or rebase your commits, then re-run 'hipfire update'.`);
       process.exit(1);
     }
@@ -4493,11 +4507,17 @@ switch (cmd) {
       console.error(`  Recover later with: git -C ${repoDir} stash pop`);
     }
     // Hard-reset to upstream. After the stash (or on a clean tree) this is a
-    // guaranteed fast-forward-or-force to origin/master — no merge to abort.
+    // guaranteed fast-forward-or-force to the resolved commit — no merge to abort.
     must(
-      git(["reset", "--hard", "origin/master"]).exitCode,
-      "git reset --hard origin/master failed — repo may be in an inconsistent state",
+      git(["reset", "--hard", fetched.out]).exitCode,
+      `git reset --hard ${fetched.out} failed — repo may be in an inconsistent state`,
     );
+    const remoteUrl = gitOut(["remote", "get-url", "origin"]);
+    await Bun.write(
+      provenancePath,
+      `repository=${remoteUrl.out || "unknown"}\nrequested_ref=${updateRef}\nresolved_commit=${fetched.out}\n`,
+    );
+    console.error(`  Source commit: ${fetched.out} ✓`);
     // Sync the CLI FIRST, before the Rust build. The CLI is pure Bun/TS — it
     // doesn't depend on the daemon compiling. If the build fails later (ROCm
     // version mismatch, missing header, WSL quirks), the registry + bug fixes
@@ -4529,7 +4549,7 @@ switch (cmd) {
     // Rebuild
     console.error("Rebuilding daemon (this may take a few minutes)...");
     const build = Bun.spawnSync(
-      [CARGO_BIN, "build", "--release", "--features", "deltanet", "--example", "daemon", "--example", "infer", "--example", "run", "-p", "hipfire-runtime"],
+      [CARGO_BIN, "build", "--release", "--locked", "--features", "deltanet", "--example", "daemon", "--example", "infer", "--example", "run", "-p", "hipfire-runtime"],
       { cwd: repoDir, stdio: ["inherit", "inherit", "inherit"], env: { ...process.env } }
     );
     if (build.exitCode !== 0) {
@@ -4539,12 +4559,12 @@ switch (cmd) {
       console.error("  daemon binary was NOT rebuilt.");
       console.error("");
       console.error("  To diagnose:  hipfire diag");
-      console.error("  To retry:     cd ~/.hipfire/src && cargo build --release --features deltanet -p hipfire-runtime --example daemon");
+      console.error("  To retry:     cd ~/.hipfire/src && cargo build --release --locked --features deltanet -p hipfire-runtime --example daemon");
       process.exit(1);
     }
     // Build the CPU quantizer binary too so `hipfire quantize` works out of the box.
     const buildQ = Bun.spawnSync(
-      [CARGO_BIN, "build", "--release", "-p", "hipfire-quantize"],
+      [CARGO_BIN, "build", "--release", "--locked", "-p", "hipfire-quantize"],
       { cwd: repoDir, stdio: ["inherit", "inherit", "inherit"], env: { ...process.env } }
     );
     if (buildQ.exitCode !== 0) {

@@ -1,14 +1,16 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # hipfire installer — detects GPU, installs deps, downloads binary + kernels.
-# Usage: curl -L https://raw.githubusercontent.com/Kaden-Schutt/hipfire/master/scripts/install.sh | bash
+# Usage: curl -L https://raw.githubusercontent.com/HUSRCF/hipfire-mit/main/scripts/install.sh | bash
 set -euo pipefail
 
 HIPFIRE_DIR="$HOME/.hipfire"
 BIN_DIR="$HIPFIRE_DIR/bin"
 MODELS_DIR="$HIPFIRE_DIR/models"
 SRC_DIR="$HIPFIRE_DIR/src"
-GITHUB_REPO="Kaden-Schutt/hipfire"
-GITHUB_BRANCH="master"
+GITHUB_REPO="${HIPFIRE_GITHUB_REPO:-HUSRCF/hipfire-mit}"
+GITHUB_REF="${HIPFIRE_INSTALL_REF:-main}"
+GITHUB_URL="${HIPFIRE_GITHUB_URL:-https://github.com/$GITHUB_REPO.git}"
 
 echo "=== hipfire installer ==="
 echo ""
@@ -66,11 +68,11 @@ case "$OS" in
         echo ""
         echo "hipfire has native Windows support. Install options:"
         echo "  1. PowerShell (recommended):"
-        echo "     irm https://raw.githubusercontent.com/$GITHUB_REPO/$GITHUB_BRANCH/scripts/install.ps1 | iex"
+        echo "     irm https://raw.githubusercontent.com/$GITHUB_REPO/$GITHUB_REF/scripts/install.ps1 | iex"
         echo "  2. WSL2 (alternative):"
         echo "     wsl --install"
         echo "     # Then inside WSL:"
-        echo "     curl -L https://raw.githubusercontent.com/$GITHUB_REPO/$GITHUB_BRANCH/scripts/install.sh | bash"
+        echo "     curl -L https://raw.githubusercontent.com/$GITHUB_REPO/$GITHUB_REF/scripts/install.sh | bash"
         exit 1
         ;;
     *)
@@ -317,14 +319,13 @@ else
         if ! command -v git &>/dev/null; then
             echo "  ERROR: git is required for remote install."
             echo "  Install git and re-run, or clone manually:"
-            echo "    git clone https://github.com/$GITHUB_REPO.git ~/.hipfire/src"
+            echo "    git clone $GITHUB_URL ~/.hipfire/src"
             exit 1
         fi
-        echo "  Cloning https://github.com/$GITHUB_REPO.git ..."
-        git clone --depth 1 --branch "$GITHUB_BRANCH" \
-            "https://github.com/$GITHUB_REPO.git" "$SRC_DIR" || {
+        echo "  Cloning $GITHUB_URL ..."
+        git clone --filter=blob:none --no-checkout "$GITHUB_URL" "$SRC_DIR" || {
             echo "  Clone failed. Check your connection or try:"
-            echo "    git clone https://github.com/$GITHUB_REPO.git $SRC_DIR"
+            echo "    git clone $GITHUB_URL $SRC_DIR"
             exit 1
         }
         echo "  Cloned ✓"
@@ -344,16 +345,34 @@ else
                 echo "  WARNING: git stash failed; reset may drop local changes."
             fi
         fi
-        echo "  Updating..."
-        # Fetch + hard-reset is safe now (tree is clean post-stash). Reset
-        # handles both fast-forward and diverged-history cases uniformly.
-        git -C "$SRC_DIR" fetch origin "$GITHUB_BRANCH" --depth 1 2>/dev/null && \
-        git -C "$SRC_DIR" reset --hard "origin/$GITHUB_BRANCH" 2>/dev/null || {
-            echo "  Update failed (non-fatal). Using existing checkout."
-        }
+        git -C "$SRC_DIR" remote set-url origin "$GITHUB_URL"
     fi
+
+    # Fetch the requested branch, tag, or full commit and resolve it to an
+    # immutable commit before building. Fail closed: silently reusing an old
+    # checkout could install code from a different repository or ref.
+    echo "  Fetching ref $GITHUB_REF ..."
+    if ! git -C "$SRC_DIR" fetch origin "$GITHUB_REF" --depth 1; then
+        echo "  ERROR: could not fetch '$GITHUB_REF' from $GITHUB_URL"
+        exit 1
+    fi
+    RESOLVED_COMMIT=$(git -C "$SRC_DIR" rev-parse --verify FETCH_HEAD)
+    git -C "$SRC_DIR" reset --hard "$RESOLVED_COMMIT"
+    echo "  Source commit: $RESOLVED_COMMIT ✓"
     REPO_DIR="$SRC_DIR"
 fi
+
+if [ "$INSTALL_MODE" = "local" ]; then
+    RESOLVED_COMMIT=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
+    if [ -n "$(git -C "$REPO_DIR" status --porcelain 2>/dev/null || true)" ]; then
+        RESOLVED_COMMIT="${RESOLVED_COMMIT}+dirty"
+    fi
+fi
+
+printf 'repository=%s\nrequested_ref=%s\nresolved_commit=%s\n' \
+    "$GITHUB_URL" "$GITHUB_REF" "$RESOLVED_COMMIT" \
+    > "$HIPFIRE_DIR/install-source.txt"
+echo "Install provenance: $HIPFIRE_DIR/install-source.txt"
 
 # ─── Build / Install binaries ────────────────────────────
 echo ""
@@ -365,28 +384,27 @@ if ! command -v cargo &>/dev/null; then
     . "$HOME/.cargo/env"
 fi
 
-TARGET_DIR=$(cd "$REPO_DIR" && cargo metadata --format-version 1 | grep -oE '"target_directory" *: *"[^"]+"' | cut -d ':' -f 2- | tr -d '"')
+TARGET_DIR=$(cd "$REPO_DIR" && cargo metadata --locked --format-version 1 | grep -oE '"target_directory" *: *"[^"]+"' | cut -d ':' -f 2- | tr -d '"')
 
-if [ -f "$TARGET_DIR/release/examples/daemon" ]; then
-    echo "  Pre-built binaries found ✓"
-else
-    echo "  No pre-built binaries. Building from source..."
-    (cd "$REPO_DIR" && \
-        echo "  cargo build --release (this may take several minutes)..." && \
-        cargo build --release --features deltanet --example daemon --example infer --example infer_hfq -p hipfire-runtime 2>&1 | tail -5)
-    if [ ! -f "$TARGET_DIR/release/examples/daemon" ]; then
-        echo ""
-        echo "  BUILD FAILED."
-        echo "  Common causes:"
-        echo "    - Missing ROCm SDK (needed to compile, not just run)"
-        echo "    - Missing system libs (check error above)"
-        echo ""
-        echo "  After fixing, re-run this installer or build manually:"
-        echo "    cd $REPO_DIR && cargo build --release --features deltanet --example daemon -p hipfire-runtime"
-        exit 1
-    fi
-    echo "  Build complete ✓"
+# Always invoke Cargo for the selected checkout. Cargo's incremental cache
+# makes a matching build cheap, while its dependency graph prevents a stale
+# target/release binary from a previous checkout being installed by mistake.
+echo "  Building locked source checkout..."
+(cd "$REPO_DIR" && \
+    echo "  cargo build --release --locked (this may take several minutes)..." && \
+    cargo build --release --locked --features deltanet --example daemon --example infer --example infer_hfq -p hipfire-runtime 2>&1 | tail -5)
+if [ ! -f "$TARGET_DIR/release/examples/daemon" ]; then
+    echo ""
+    echo "  BUILD FAILED."
+    echo "  Common causes:"
+    echo "    - Missing ROCm SDK (needed to compile, not just run)"
+    echo "    - Missing system libs (check error above)"
+    echo ""
+    echo "  After fixing, re-run this installer or build manually:"
+    echo "    cd $REPO_DIR && cargo build --release --locked --features deltanet --example daemon -p hipfire-runtime"
+    exit 1
 fi
+echo "  Build complete ✓"
 
 # Copy binaries
 cp "$TARGET_DIR/release/examples/daemon" "$BIN_DIR/daemon"

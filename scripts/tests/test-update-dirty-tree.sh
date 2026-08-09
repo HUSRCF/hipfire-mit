@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Regression test for `hipfire update` dirty-working-tree bug.
 #
-# Before the fix, cli/index.ts ran `git pull origin master` which aborts with
+# Before the fix, cli/index.ts ran `git pull origin main` which aborts with
 #   "Your local changes to the following files would be overwritten by merge"
 # whenever a tracked file (notably Cargo.lock, which cargo build can rewrite
 # across cargo versions) is modified in the working tree.
@@ -34,7 +35,7 @@ git init --quiet --bare "$UPSTREAM"
 git init --quiet "$SEED"
 git -C "$SEED" config user.email test@example.com
 git -C "$SEED" config user.name  "Test"
-git -C "$SEED" checkout -q -b master
+git -C "$SEED" checkout -q -b main
 
 cat > "$SEED/Cargo.toml" <<'EOF'
 [workspace]
@@ -49,7 +50,8 @@ echo "fn main() {}" > "$SEED/main.rs"
 git -C "$SEED" add .
 git -C "$SEED" commit --quiet -m "initial"
 git -C "$SEED" remote add origin "$UPSTREAM"
-git -C "$SEED" push --quiet origin master
+git -C "$SEED" push --quiet origin main
+git -C "$UPSTREAM" symbolic-ref HEAD refs/heads/main
 
 # ── 2. Clone "locally" (simulates a hipfire install) ────────────────────
 git clone --quiet "$UPSTREAM" "$LOCAL"
@@ -64,7 +66,7 @@ EOF
 echo "fn main() { println!(\"updated\"); }" > "$SEED/main.rs"
 git -C "$SEED" add .
 git -C "$SEED" commit --quiet -m "upstream update"
-git -C "$SEED" push --quiet origin master
+git -C "$SEED" push --quiet origin main
 
 # ── 4. Dirty the local clone exactly as the user reported ───────────────
 # Cargo.lock gets rewritten by `cargo build` when the lockfile format
@@ -80,10 +82,10 @@ version = "0.1.0"
 # user scribble
 EOF
 
-# Sanity: before the fix, `git pull origin master` inside $LOCAL aborts
+# Sanity: before the fix, `git pull origin main` inside $LOCAL aborts
 # with exactly the reported error. Capture that to prove we're reproducing
 # the bug. We don't fail the test here — just document it.
-if git -C "$LOCAL" pull origin master 2>"$TMPDIR/pull.err" 1>/dev/null; then
+if git -C "$LOCAL" pull origin main 2>"$TMPDIR/pull.err" 1>/dev/null; then
     fail "baseline reproduction failed: plain 'git pull' unexpectedly succeeded with a dirty tree"
 fi
 grep -q "local changes to the following files would be overwritten" "$TMPDIR/pull.err" \
@@ -94,22 +96,25 @@ grep -q "local changes to the following files would be overwritten" "$TMPDIR/pul
 # from this sequence, this test will need to be updated in lockstep.
 # Return codes:
 #   0  = updated
-#   10 = refused (not master)
+#   10 = refused (not requested ref)
 #   11 = refused (local commits ahead)
 #   20 = git operation failed
 update_flow() {
     local repo="$1"
+    local requested_ref="${2:-main}"
     local branch
     branch="$(git -C "$repo" rev-parse --abbrev-ref HEAD)"
-    if [ "$branch" != "master" ] && [ "$branch" != "HEAD" ]; then
-        echo "refusing: branch is $branch, not master" >&2
+    if [ "$branch" != "$requested_ref" ] && [ "$branch" != "HEAD" ]; then
+        echo "refusing: branch is $branch, not $requested_ref" >&2
         return 10
     fi
-    git -C "$repo" fetch origin master --quiet || return 20
+    git -C "$repo" fetch origin "$requested_ref" --quiet || return 20
+    local fetched
+    fetched="$(git -C "$repo" rev-parse --verify FETCH_HEAD)" || return 20
     local ahead
-    ahead="$(git -C "$repo" rev-list --count origin/master..HEAD 2>/dev/null || echo 0)"
+    ahead="$(git -C "$repo" rev-list --count "$fetched..HEAD" 2>/dev/null || echo 0)"
     if [ "${ahead:-0}" -gt 0 ]; then
-        echo "refusing: local master has $ahead unpushed commit(s)" >&2
+        echo "refusing: local checkout has $ahead unpushed commit(s)" >&2
         return 11
     fi
     if [ -n "$(git -C "$repo" status --porcelain)" ]; then
@@ -117,7 +122,7 @@ update_flow() {
         ts="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
         git -C "$repo" stash push --include-untracked -m "hipfire-update-$ts" --quiet || return 20
     fi
-    git -C "$repo" reset --hard origin/master --quiet || return 20
+    git -C "$repo" reset --hard "$fetched" --quiet || return 20
 }
 
 update_flow "$LOCAL" || fail "fixed update_flow exited non-zero ($?)"
@@ -152,7 +157,7 @@ fn main() { println!("second update"); }
 EOF
 git -C "$SEED" add main.rs
 git -C "$SEED" commit --quiet -m "second upstream update"
-git -C "$SEED" push --quiet origin master
+git -C "$SEED" push --quiet origin main
 update_flow "$LOCAL_CLEAN" || fail "clean-tree update_flow exited non-zero ($?)"
 grep -q 'second update' "$LOCAL_CLEAN/main.rs" \
     || fail "clean-tree update didn't pull the second upstream commit"
@@ -188,6 +193,17 @@ set -e
 grep -q 'local-only change' "$LOCAL_AHEAD/local_only.txt" \
     || fail "ahead-commits guard clobbered the local commit"
 
+# 7d. Immutable commit pin: a detached install may intentionally remain on
+# an older commit even when the upstream branch has advanced.
+LOCAL_PINNED="$TMPDIR/local-pinned"
+git clone --quiet "$UPSTREAM" "$LOCAL_PINNED"
+PINNED_COMMIT="$(git -C "$SEED" rev-list --max-parents=0 HEAD)"
+git -C "$LOCAL_PINNED" checkout --quiet --detach "$PINNED_COMMIT"
+update_flow "$LOCAL_PINNED" "$PINNED_COMMIT" \
+    || fail "immutable-ref update_flow exited non-zero ($?)"
+[ "$(git -C "$LOCAL_PINNED" rev-parse HEAD)" = "$PINNED_COMMIT" ] \
+    || fail "immutable-ref update moved away from pinned commit"
+
 # ── 8. Divergence guard ────────────────────────────────────────────────
 # The update_flow() above mirrors the logic in cli/index.ts. If someone
 # reverts cli/index.ts back to a plain `git pull`, this test still passes
@@ -207,14 +223,37 @@ else
         || fail "cli/index.ts is missing the 'git stash push --include-untracked' call"
     grep -q 'hipfire-update-' "$CLI" \
         || fail "cli/index.ts is missing the 'hipfire-update-' stash marker"
-    grep -q '"reset", "--hard", "origin/master"' "$CLI" \
-        || fail "cli/index.ts is missing the 'git reset --hard origin/master' step"
-    grep -q 'rev-list.*--count.*origin/master\.\.HEAD' "$CLI" \
+    grep -q '"rev-parse", "--verify", "FETCH_HEAD"' "$CLI" \
+        || fail "cli/index.ts is missing immutable FETCH_HEAD resolution"
+    grep -q '"reset", "--hard", fetched.out' "$CLI" \
+        || fail "cli/index.ts is missing the reset to resolved fetched commit"
+    grep -q 'rev-list.*--count.*fetched.out.*HEAD' "$CLI" \
         || fail "cli/index.ts is missing the unpushed-commits guard"
+    grep -q 'HIPFIRE_INSTALL_REF' "$CLI" \
+        || fail "cli/index.ts is missing the explicit install-ref override"
+    grep -q 'requested_ref=' "$CLI" \
+        || fail "cli/index.ts is missing persisted provenance handling"
+    grep -q '"--locked"' "$CLI" \
+        || fail "cli/index.ts update builds are not lockfile-enforced"
 
     # Forbidden: the old buggy call must not be back.
-    if grep -E '"pull", *"origin", *"master"' "$CLI" >/dev/null; then
-        fail "cli/index.ts still contains the buggy 'git pull origin master' call"
+    if grep -E '"pull", *"origin"' "$CLI" >/dev/null; then
+        fail "cli/index.ts still contains the buggy 'git pull origin' call"
+    fi
+
+    INSTALLER="$REPO_ROOT/scripts/install.sh"
+    grep -q 'HUSRCF/hipfire-mit' "$INSTALLER" \
+        || fail "install.sh does not default to the clean-room repository"
+    grep -q 'HIPFIRE_INSTALL_REF' "$INSTALLER" \
+        || fail "install.sh is missing the explicit install-ref override"
+    grep -q 'rev-parse --verify FETCH_HEAD' "$INSTALLER" \
+        || fail "install.sh does not resolve fetched refs to immutable commits"
+    grep -q 'install-source.txt' "$INSTALLER" \
+        || fail "install.sh does not persist install provenance"
+    grep -q 'cargo build --release --locked' "$INSTALLER" \
+        || fail "install.sh build is not lockfile-enforced"
+    if grep -q 'Kaden-Schutt/hipfire' "$INSTALLER"; then
+        fail "install.sh still points at the post-boundary upstream repository"
     fi
 fi
 
