@@ -137,3 +137,61 @@ Copy this section for each performance-sensitive milestone.
   detector warnings; report `/tmp/coherence-dflash-20260809-231452.md`.
 - Decoded prose and code outputs were manually checked and accepted.
 - Decision: accept M1 rows 3-8.
+
+---
+
+## M2: device-execution contract — 2026-08-09
+
+### Run identity
+
+- Baseline commit: `0ba62820e50c2b1ebb31e641e3009a44b95a2651`.
+- Candidate commit: `793c5b9b3126bf443bafe5ee83d0c1e59ef23dce`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`; live initialization reported HIP 7.14
+  and 48.3 GB VRAM.
+- Candidate benchmark binary md5:
+  `afbfedb8d5b868e782927827ee407fe5`.
+- Prompt: deterministic synthetic token IDs `0..31`; tokenizer and prompt
+  bytes are not involved.
+- Model: `/home/husrcf/.hipfire/models/qwen3.5-4b.mq4` (read-only).
+- Model md5: `712b69f8cf1016081cfa507c4d50e33d`.
+- Environment: `ROCR_VISIBLE_DEVICES=0`, `HIP_VISIBLE_DEVICES=0`,
+  `HIPFIRE_MODELS_DIR=/home/husrcf/.hipfire/models`,
+  `HIPFIRE_BASELINE_ARCH=gfx1100-w7900`, and ROCm 7.14 runtime directories
+  prepended to `LD_LIBRARY_PATH`.
+- Command: `./scripts/speed-gate.sh --fast --verbose`, serialized by
+  `scripts/gpu-lock.sh`. Each observation below is the gate's best of two
+  fresh benchmark executions. Observation 1 preceded the commit, observation
+  2 ran inside the commit hook, and observation 3 ran after the commit.
+
+### Measurements
+
+| Metric | Committed floor | Candidate observation 1 | Candidate observation 2 | Candidate observation 3 | Candidate median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1294.3 | 1310.5 | 1311.0 | 1310.5 |
+| 4B MQ4 decode tok/s | 140.9 | 141.5 | 141.3 | 141.0 | 141.3 |
+
+### Decision
+
+- Candidate median delta: +6.78% prefill and +0.28% decode. Neither metric
+  regressed; all three gate observations passed the 5% floor.
+- Live GPU0 smoke: the runtime resolved device 0 as `gfx1100`, loaded the 4B
+  model, and completed one prefill and one decode token.
+- Correctness: `cargo test --locked -p rdna-compute --lib` passed all four
+  target-contract tests; `scripts/verify-bind-thread.sh` audited 380 public
+  entries and passed both single- and multi-device invariants.
+- Clean-room license/source gate: passed.
+- Coherence: the post-commit-hook report
+  `/tmp/coherence-20260809-234600.md` passed all four available cells. Outputs
+  were manually reviewed as coherent and on-topic with no attractor or
+  special-token corruption.
+- Agentic A/B diagnostic: candidate daemon md5
+  `2baa852590a46f03ca85ec5bd5151193`; detached-parent daemon md5
+  `032972644846276187775c751eb8b727`. Both produced the same malformed
+  `name` field for the fixed Qwen 3.6 27B tool-call cell; the candidate did so
+  twice. Reports: `/tmp/agentic-m2-candidate-rerun.md` and
+  `/tmp/agentic-m2-parent-0ba6282.md`. This pre-existing failure was isolated
+  from the device change and remains an open correctness item.
+- Decision: accept the device-execution foundation; do not mark all M2 rows
+  complete until the remaining format, maintenance, integration, and agentic
+  correctness work is closed.
