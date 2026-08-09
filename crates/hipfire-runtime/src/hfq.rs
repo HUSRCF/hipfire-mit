@@ -120,10 +120,151 @@ fn hfq_usize(value: u64, field: &str) -> io::Result<usize> {
     usize::try_from(value).map_err(|_| invalid_hfq(format!("HFQ {field} does not fit this host")))
 }
 
+fn hfq_numel(name: &str, shape: &[u32]) -> io::Result<usize> {
+    shape.iter().try_fold(1usize, |numel, &dim| {
+        numel.checked_mul(dim as usize).ok_or_else(|| {
+            invalid_hfq(format!("HFQ tensor {name:?} element count overflows this host"))
+        })
+    })
+}
+
+fn hfq_block_payload_size(
+    name: &str,
+    numel: usize,
+    group_elems: usize,
+    block_bytes: usize,
+) -> io::Result<usize> {
+    let blocks = numel / group_elems + usize::from(numel % group_elems != 0);
+    blocks.checked_mul(block_bytes).ok_or_else(|| {
+        invalid_hfq(format!("HFQ tensor {name:?} payload size overflows this host"))
+    })
+}
+
+fn validate_hfq_tensor_layout(
+    name: &str,
+    quant_type: u8,
+    shape: &[u32],
+    group_size: u32,
+    data_size: usize,
+) -> io::Result<()> {
+    enum Layout {
+        Dense { bytes_per_element: usize },
+        Blocks { group_elems: usize, block_bytes: usize },
+        Q8Hfq,
+        Hfp4G32,
+    }
+
+    let layout = match quant_type {
+        0 => Layout::Blocks { group_elems: 64, block_bytes: 36 },
+        1 | 16 => Layout::Dense { bytes_per_element: 2 },
+        2 => Layout::Dense { bytes_per_element: 4 },
+        3 => Layout::Blocks { group_elems: 32, block_bytes: 34 },
+        4 => Layout::Blocks { group_elems: 256, block_bytes: 144 },
+        5 => Layout::Q8Hfq,
+        6 | 13 => Layout::Blocks { group_elems: 256, block_bytes: 136 },
+        7 => Layout::Blocks { group_elems: 128, block_bytes: 72 },
+        8 | 15 => Layout::Blocks { group_elems: 256, block_bytes: 200 },
+        9 | 18 | 19 => Layout::Blocks { group_elems: 256, block_bytes: 72 },
+        10 => Layout::Blocks { group_elems: 128, block_bytes: 40 },
+        11 | 17 => Layout::Blocks { group_elems: 256, block_bytes: 104 },
+        12 => Layout::Blocks { group_elems: 128, block_bytes: 56 },
+        14 => Layout::Blocks { group_elems: 256, block_bytes: 258 },
+        20 => Layout::Blocks { group_elems: 256, block_bytes: 112 },
+        21 | 24 => Layout::Hfp4G32,
+        _ => {
+            return Err(invalid_hfq(format!(
+                "HFQ tensor {name:?} uses unsupported quant_type {quant_type}"
+            )))
+        }
+    };
+
+    let numel = hfq_numel(name, shape)?;
+    let (expected_group_size, expected_data_size) = match layout {
+        Layout::Dense { bytes_per_element } => (
+            0u32,
+            numel.checked_mul(bytes_per_element).ok_or_else(|| {
+                invalid_hfq(format!("HFQ tensor {name:?} payload size overflows this host"))
+            })?,
+        ),
+        Layout::Blocks { group_elems, block_bytes } => (
+            group_elems as u32,
+            hfq_block_payload_size(name, numel, group_elems, block_bytes)?,
+        ),
+        Layout::Q8Hfq => {
+            if shape.len() != 2 {
+                return Err(invalid_hfq(format!(
+                    "HFQ Q8HFQ tensor {name:?} must be 2D, got shape {shape:?}"
+                )));
+            }
+            let rows = shape[0] as usize;
+            let columns = shape[1] as usize;
+            if columns % 32 != 0 {
+                return Err(invalid_hfq(format!(
+                    "HFQ Q8HFQ tensor {name:?} columns ({columns}) are not divisible by 32"
+                )));
+            }
+            let raw_row = columns
+                .checked_add((columns / 32).checked_mul(2).ok_or_else(|| {
+                    invalid_hfq(format!("HFQ tensor {name:?} row size overflows this host"))
+                })?)
+                .ok_or_else(|| {
+                    invalid_hfq(format!("HFQ tensor {name:?} row size overflows this host"))
+                })?;
+            let row_stride = raw_row.checked_add(127).ok_or_else(|| {
+                invalid_hfq(format!("HFQ tensor {name:?} row alignment overflows this host"))
+            })? & !127;
+            (
+                32,
+                rows.checked_mul(row_stride).ok_or_else(|| {
+                    invalid_hfq(format!("HFQ tensor {name:?} payload size overflows this host"))
+                })?,
+            )
+        }
+        Layout::Hfp4G32 => {
+            if shape.len() != 2 {
+                return Err(invalid_hfq(format!(
+                    "HFQ FP4 tensor {name:?} must be 2D, got shape {shape:?}"
+                )));
+            }
+            let rows = shape[0] as usize;
+            let columns = shape[1] as usize;
+            if columns % 256 != 0 {
+                return Err(invalid_hfq(format!(
+                    "HFQ FP4 tensor {name:?} columns ({columns}) are not divisible by 256"
+                )));
+            }
+            let block_bytes = (columns / 32).checked_mul(17).ok_or_else(|| {
+                invalid_hfq(format!("HFQ tensor {name:?} row size overflows this host"))
+            })?;
+            let row_bytes = 16usize.checked_add(block_bytes).ok_or_else(|| {
+                invalid_hfq(format!("HFQ tensor {name:?} row size overflows this host"))
+            })?;
+            (
+                32,
+                rows.checked_mul(row_bytes).ok_or_else(|| {
+                    invalid_hfq(format!("HFQ tensor {name:?} payload size overflows this host"))
+                })?,
+            )
+        }
+    };
+
+    if group_size != expected_group_size {
+        return Err(invalid_hfq(format!(
+            "HFQ tensor {name:?} quant_type {quant_type} has group_size {group_size}, expected {expected_group_size}"
+        )));
+    }
+    if data_size != expected_data_size {
+        return Err(invalid_hfq(format!(
+            "HFQ tensor {name:?} quant_type {quant_type} payload is {data_size} bytes, expected {expected_data_size} for shape {shape:?}"
+        )));
+    }
+    Ok(())
+}
+
 /// Parse and validate the complete HFQ header and tensor index before any
-/// input-derived slice is constructed. Tensor payload bytes remain opaque to
-/// this layer; their quantization-specific shape contracts are checked by the
-/// corresponding weight loaders.
+/// input-derived slice is constructed. Payload contents remain opaque, while
+/// the quantization type, group size, shape, and declared byte length must
+/// agree before a loader can expose the range to a GPU dispatch.
 fn parse_hfq_bytes(bytes: &[u8]) -> io::Result<ParsedHfq> {
     if bytes.len() < HFQ_HEADER_SIZE {
         return Err(invalid_hfq(format!(
@@ -245,6 +386,7 @@ fn parse_hfq_bytes(bytes: &[u8]) -> io::Result<ParsedHfq> {
             read_hfq_u64(bytes, &mut pos, data_offset, "tensor data size")?,
             "tensor data size",
         )?;
+        validate_hfq_tensor_layout(&name, quant_type, &shape, group_size, data_size)?;
         let tensor_end = cumulative_offset
             .checked_add(data_size)
             .ok_or_else(|| invalid_hfq(format!("HFQ tensor {name:?} data range overflows")))?;
@@ -921,20 +1063,22 @@ mod tests {
     #[test]
     fn parses_valid_header_index_and_payload_ranges() {
         let metadata = r#"{"config":{"model_type":"qwen3"}}"#;
+        let mq4_data = vec![0u8; 136];
+        let f16_data = vec![0u8; 8];
         let tensors = [
             TestTensor {
                 name: "model.embed_tokens.weight",
                 quant_type: 13,
-                shape: &[2, 4],
+                shape: &[1, 256],
                 group_size: 256,
-                data: &[1, 2, 3],
+                data: &mq4_data,
             },
             TestTensor {
                 name: "lm_head.weight",
                 quant_type: 1,
                 shape: &[4],
                 group_size: 0,
-                data: &[4, 5],
+                data: &f16_data,
             },
         ];
         let bytes = build_hfq(metadata, &tensors);
@@ -943,17 +1087,76 @@ mod tests {
         assert_eq!(parsed.arch_id, 5);
         assert_eq!(parsed.metadata_json, metadata);
         assert_eq!(parsed.tensors.len(), 2);
-        assert_eq!(parsed.tensors[0].shape, vec![2, 4]);
+        assert_eq!(parsed.tensors[0].shape, vec![1, 256]);
         assert_eq!(parsed.tensors[0].quant_type, 13);
         assert_eq!(
             parsed.tensors[1].data_offset,
-            parsed.tensors[0].data_offset + 3
+            parsed.tensors[0].data_offset + 136
         );
         assert_eq!(
-            &bytes[parsed.tensors[1].data_offset..parsed.tensors[1].data_offset + 2],
-            &[4, 5]
+            &bytes[parsed.tensors[1].data_offset..parsed.tensors[1].data_offset + 8],
+            &[0; 8]
         );
         assert_eq!(parsed.tensor_map["lm_head.weight"], 1);
+    }
+
+    #[test]
+    fn validates_registered_quant_layout_sizes() {
+        let cases: &[(u8, &[u32], u32, usize)] = &[
+            (0, &[65], 64, 72),
+            (1, &[3], 0, 6),
+            (2, &[3], 0, 12),
+            (3, &[33], 32, 68),
+            (4, &[257], 256, 288),
+            (5, &[2, 256], 32, 768),
+            (6, &[1, 256], 256, 136),
+            (7, &[1, 128], 128, 72),
+            (8, &[1, 256], 256, 200),
+            (9, &[1, 256], 256, 72),
+            (10, &[1, 128], 128, 40),
+            (11, &[1, 256], 256, 104),
+            (12, &[1, 128], 128, 56),
+            (13, &[1, 256], 256, 136),
+            (14, &[1, 256], 256, 258),
+            (15, &[1, 256], 256, 200),
+            (16, &[3], 0, 6),
+            (17, &[1, 256], 256, 104),
+            (18, &[1, 256], 256, 72),
+            (19, &[1, 256], 256, 72),
+            (20, &[1, 256], 256, 112),
+            (21, &[2, 256], 32, 304),
+            (24, &[2, 512], 32, 576),
+        ];
+        for &(quant_type, shape, group_size, data_size) in cases {
+            validate_hfq_tensor_layout("weight", quant_type, shape, group_size, data_size)
+                .unwrap_or_else(|err| panic!("qt={quant_type} shape={shape:?}: {err}"));
+        }
+    }
+
+    #[test]
+    fn rejects_quant_layout_metadata_and_payload_mismatches() {
+        let error = validate_hfq_tensor_layout("weight", 13, &[1, 256], 128, 136)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("group_size 128, expected 256"));
+
+        let error = validate_hfq_tensor_layout("weight", 1, &[4], 0, 6)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("payload is 6 bytes, expected 8"));
+
+        assert!(validate_hfq_tensor_layout("weight", 5, &[256], 32, 384)
+            .unwrap_err()
+            .to_string()
+            .contains("must be 2D"));
+        assert!(validate_hfq_tensor_layout("weight", 21, &[1, 384], 32, 220)
+            .unwrap_err()
+            .to_string()
+            .contains("not divisible by 256"));
+        assert!(validate_hfq_tensor_layout("weight", 22, &[1, 256], 32, 136)
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported quant_type 22"));
     }
 
     #[test]
