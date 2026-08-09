@@ -127,14 +127,24 @@ counter.
 The fixed 27B fast cell now passes with valid `name` and `arguments` and zero
 warnings. In the full eight-cell matrix, all four 27B cells and both 35B Pi
 cells pass; there are zero structural hard failures. Two 35B Hermes cells
-still soft-warn because that model terminates without selecting a tool, so the
-full aggregate remains open. Commit
+initially soft-warned because that model terminated without selecting a tool.
+Commit
 `658baa8a7fd5e2f45fd4ffadd7577e89391702ba` adds the daemon, tool-call
 module, and agentic gate itself to pre-commit hotspot coverage, with a static
 test protecting those mappings.
 
-All 164 `hipfire-runtime` library tests pass. Three GPU0 performance
-observations have median 1320.6 prefill tok/s and 142.1 decode tok/s,
-respectively +7.60% and +0.85% over the committed W7900 floor. Detailed
-quality reports and measurements are recorded in
-`docs/cleanroom/PERFORMANCE_RECORD.md`.
+Commit `cab7bb2e2207cc42d70bfbe7db6bb193e6436b5d` closes that remaining
+35B Hermes reliability item without changing the gate threshold. If a model
+selects a terminator immediately after an otherwise empty unclosed `<think>`
+block, the daemon commits `</think>\n` through the normal KV path and resamples
+once. The constraint does not alter non-empty or already-closed thinking and
+cannot fire more than once per response. Fast mode also accepts an explicit
+`HIPFIRE_AGENTIC_FAST_MODEL=3.5|3.6` selector for deterministic diagnosis.
+
+All 166 `hipfire-runtime` library tests pass. The complete GPU0 agentic matrix
+now passes all eight cells with zero hard failures and zero soft warnings,
+including both Qwen 3.5 35B Hermes cases and both multi-turn cases. Three
+GPU0 performance observations for the final agentic batch have median 1288.8
+prefill tok/s and 141.6 decode tok/s, respectively +5.01% and +0.50% over the
+committed W7900 floor. Detailed quality reports and measurements are recorded
+in `docs/cleanroom/PERFORMANCE_RECORD.md`.

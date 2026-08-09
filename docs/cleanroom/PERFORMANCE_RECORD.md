@@ -252,3 +252,66 @@ Copy this section for each performance-sensitive milestone.
   `/tmp/agentic-m2-quote-constraint-full.md`.
 - Decision: accept the bounded JSON structural fix and keep the 35B Hermes
   tool-selection reliability item open; do not weaken the full-gate threshold.
+
+---
+
+## M2 follow-up: empty-thinking termination recovery — 2026-08-10
+
+### Run identity
+
+- Regression parent: `511d4ad`.
+- Candidate commit: `cab7bb2e2207cc42d70bfbe7db6bb193e6436b5d`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Candidate daemon md5: `6ec11cd7b3b577ce143a2d0d0412ccd6`.
+- Candidate benchmark binary md5:
+  `af5c380e3c3a8becec23f7e4348646f3`.
+- Agentic target models:
+  `/home/husrcf/.hipfire/models/qwen3.6-27b.mq4` and
+  `/home/husrcf/.hipfire/models/qwen3.5-35b-a3b.mq4` (read-only).
+- Agentic inputs: `benchmarks/prompts/agentic_pi_system.txt`,
+  `benchmarks/prompts/agentic_hermes_system.txt`, and
+  `benchmarks/prompts/agentic_user_read.txt`.
+- Environment: `ROCR_VISIBLE_DEVICES=0`, `HIP_VISIBLE_DEVICES=0`,
+  `HIPFIRE_MODELS_DIR=/home/husrcf/.hipfire/models`, and ROCm 7.14 runtime
+  directories prepended to `LD_LIBRARY_PATH`.
+- Targeted quality commands: `HIPFIRE_AGENTIC_FAST_MODEL=3.5
+  ./scripts/agentic-gate.sh --fast` and the corresponding `3.6` command.
+  Full quality command: `./scripts/agentic-gate.sh`. Every GPU command was
+  serialized by `scripts/gpu-lock.sh`.
+- Performance command: `./scripts/speed-gate.sh --fast --verbose` with
+  `HIPFIRE_BASELINE_ARCH=gfx1100-w7900`. Each observation is the gate's best
+  of two benchmark executions. Observation 1 preceded the commit, observation
+  2 ran inside the commit hook, and observation 3 ran after the commit.
+
+### Measurements
+
+| Metric | Committed floor | Candidate observation 1 | Candidate observation 2 | Candidate observation 3 | Candidate median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1286.6 | 1295.1 | 1288.8 | 1288.8 |
+| 4B MQ4 decode tok/s | 140.9 | 141.6 | 141.8 | 140.7 | 141.6 |
+
+### Decision
+
+- Candidate median delta: +5.01% prefill and +0.50% decode. All three gate
+  observations pass the committed 5% regression tolerance.
+- Correctness: all 166 `hipfire-runtime` library tests pass, including the
+  terminator, non-terminator, non-empty, already-closed, and plain-output
+  constraint cases. The daemon example and benchmark were rebuilt from the
+  candidate source, the agentic detector self-check passed, and the
+  clean-room source/license gate passed.
+- Targeted GPU0 quality: both the 35B and 27B fast cells pass with valid
+  `name` and `arguments` JSON and zero warnings. Reports:
+  `/tmp/agentic-empty-think-35b-fast.md` and
+  `/tmp/agentic-empty-think-36-fast.md`.
+- Full GPU0 quality: all eight cells pass with zero hard failures and zero
+  soft warnings. Every cell emitted a parseable tool call; report:
+  `/tmp/agentic-empty-think-full.md`.
+- Commit-hook quality: the Qwen 3.6 agentic cell passed again with zero
+  warnings. The four-cell short coherence battery had no hard errors and no
+  token corruption or repetition loop. Its 9B reasoning response reached the
+  configured output cap while remaining coherent. Reports:
+  `/tmp/agentic-gate-20260810-004225.md` and
+  `/tmp/coherence-20260810-004208.md`.
+- Decision: accept the bounded empty-thinking recovery and close the 35B
+  Hermes tool-selection reliability item without weakening the full gate.
