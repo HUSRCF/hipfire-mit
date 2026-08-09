@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! CASK: core-aware selective KV compression (arXiv:2604.10900).
 //!
 //! Sits atop TriAttention. TriAttention scores tokens and keeps the top-B;
@@ -18,7 +19,6 @@
 //! max-GQA aggregation TriAttention uses for top-B. The paper offers
 //! "score mass, similarity, or position-aware" as options; softmax over
 //! score is the score-mass variant with a numerically stable normalizer.
-
 use crate::llama::{f16_to_f32, f32_to_f16, KvCache};
 use crate::triattn::{EvictionCtx, EvictionResult};
 use hip_bridge::HipResult;
@@ -76,9 +76,9 @@ impl CaskCtx {
         kv: &mut KvCache,
         current_physical: usize,
     ) -> HipResult<Option<EvictionResult>> {
-        if current_physical < self.base.budget + self.base.beta {
+        let Some(position_plan) = self.base.position_plan(kv, current_physical)? else {
             return Ok(None);
-        }
+        };
 
         // Detect KV mode and layout. V is always Q8_0 across modes (the
         // write path only rotates K), so V fold uses kv_fold_q8 uniformly.
@@ -93,8 +93,7 @@ impl CaskCtx {
                 return self.base.maybe_evict(gpu, kv, current_physical);
             };
 
-        let absolute_pos = current_physical + kv.compact_offset;
-        let p_q = absolute_pos as f32;
+        let p_q = position_plan.absolute_pos as f32;
 
         // Budget math: output always has exactly `budget` slots (c core + s merged,
         // c + s = budget). Input constraint: c + m*s ≤ physical.
@@ -308,12 +307,15 @@ impl CaskCtx {
         }
 
         // Output size is always `budget` slots (core_slots + merge_slots = budget).
-        kv.compact_offset += current_physical - budget;
+        kv.compact_offset = position_plan.new_compact_offset;
         self.base.eviction_count.set(self.base.eviction_count.get() + 1);
         // m-fold merges multiple source positions per output slot — no single
         // retain_mask captures the mapping. Empty mask signals "can't mirror"
         // to callers that shadow the eviction into non-KV buffers.
-        Ok(Some(EvictionResult { new_physical: budget, retain_mask: Vec::new() }))
+        Ok(Some(EvictionResult {
+            new_physical: position_plan.new_physical,
+            retain_mask: Vec::new(),
+        }))
     }
 }
 

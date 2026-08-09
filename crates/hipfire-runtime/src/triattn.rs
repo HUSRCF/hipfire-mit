@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! TriAttention: KV-cache compression via trigonometric series scoring.
 //!
 //! Reference: Mao et al. 2026 "TriAttention: Efficient Long Reasoning with
@@ -34,13 +35,12 @@
 //! So we score directly on the cached post-RoPE K with a query-position-
 //! dependent phase, no de-rotation kernel needed. (asym3's Givens stage
 //! does require de-Givens at scoring time — not implemented yet.)
-
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use hip_bridge::HipResult;
+use hip_bridge::{HipError, HipResult};
 use rdna_compute::{DType, Gpu, GpuTensor};
 
 /// Q-side centers for one (layer, head, band) triple.
@@ -725,6 +725,75 @@ pub struct EvictionResult {
     pub retain_mask: Vec<u32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EvictionPositionPlan {
+    pub absolute_pos: usize,
+    pub new_physical: usize,
+    pub new_compact_offset: usize,
+}
+
+fn validate_eviction_schedule(
+    budget: usize,
+    beta: usize,
+    physical_cap: usize,
+) -> HipResult<usize> {
+    if budget == 0 {
+        return Err(HipError::new(0, "eviction budget must be greater than zero"));
+    }
+    let trigger = budget.checked_add(beta).ok_or_else(|| {
+        HipError::new(0, "eviction budget + beta overflows host address space")
+    })?;
+    if trigger > physical_cap {
+        return Err(HipError::new(
+            0,
+            &format!(
+                "eviction trigger ({trigger}) exceeds physical_cap ({physical_cap})"
+            ),
+        ));
+    }
+    Ok(trigger)
+}
+
+fn plan_eviction_position(
+    budget: usize,
+    trigger: usize,
+    physical_cap: usize,
+    current_physical: usize,
+    compact_offset: usize,
+) -> HipResult<Option<EvictionPositionPlan>> {
+    if current_physical > physical_cap {
+        return Err(HipError::new(
+            0,
+            &format!(
+                "eviction current_physical ({current_physical}) exceeds physical_cap ({physical_cap})"
+            ),
+        ));
+    }
+    if current_physical < trigger {
+        return Ok(None);
+    }
+    let dropped = current_physical.checked_sub(budget).ok_or_else(|| {
+        HipError::new(0, "eviction current_physical is below its retention budget")
+    })?;
+    let absolute_pos = current_physical.checked_add(compact_offset).ok_or_else(|| {
+        HipError::new(0, "eviction absolute position overflows host address space")
+    })?;
+    let new_compact_offset = compact_offset.checked_add(dropped).ok_or_else(|| {
+        HipError::new(0, "eviction compact offset overflows host address space")
+    })?;
+    let next_absolute = budget.checked_add(new_compact_offset).ok_or_else(|| {
+        HipError::new(0, "eviction next absolute position overflows host address space")
+    })?;
+    if next_absolute != absolute_pos {
+        return Err(HipError::new(0, "eviction position continuity invariant failed"));
+    }
+    Ok(Some(EvictionPositionPlan {
+        absolute_pos,
+        new_physical: budget,
+        new_compact_offset,
+    }))
+}
+
 /// Pre-allocated scratch + policy for periodic TriAttention eviction during
 /// autoregressive decode. Instantiate once per inference session; call
 /// `maybe_evict` after every new-token write. When the physical cache has
@@ -749,6 +818,8 @@ pub struct EvictionCtx {
     pub n_rot: usize,
     pub rope_theta: f32,
     pub max_seq: usize,
+    /// Physical position at which compaction fires (`budget + beta`).
+    trigger: usize,
     /// Reusable scratch: sized to handle any state up to `max_seq`.
     pub scores_buf: GpuTensor,
     pub k_compact: GpuTensor,
@@ -777,12 +848,9 @@ impl EvictionCtx {
         rope_theta: f32,
         max_seq: usize,
     ) -> HipResult<Self> {
-        // The eviction trigger is `current_physical >= budget + beta`, where
-        // `current_physical` is bounded by `KvCache::physical_cap`. Historically
-        // physical_cap == max_seq so the two were interchangeable; now that
-        // eviction-aware allocators decouple them, the meaningful invariant is
-        // the physical cap (checked at maybe_evict time against the supplied kv).
-        assert!(max_seq >= budget + beta, "max_seq < budget+beta; eviction can never fire");
+        // `max_seq` is the physical scratch/cache cap on this API despite its
+        // historical name. Validate the schedule before allocating buffers.
+        let trigger = validate_eviction_schedule(budget, beta, max_seq)?;
         let n_bands = head_dim / 2;
         let centers_per_layer = n_heads * n_bands * 3;
 
@@ -817,6 +885,7 @@ impl EvictionCtx {
         Ok(Self {
             centers_dev, fa_layer_ids, centers_per_layer,
             budget, beta, n_heads, n_kv_heads, head_dim, n_rot, rope_theta, max_seq,
+            trigger,
             scores_buf, k_compact, v_compact, retain_dev,
             eviction_count: std::cell::Cell::new(0),
         })
@@ -832,11 +901,10 @@ impl EvictionCtx {
         kv: &mut crate::llama::KvCache,
         current_physical: usize,
     ) -> HipResult<Option<EvictionResult>> {
-        if current_physical < self.budget + self.beta {
+        let Some(position_plan) = self.position_plan(kv, current_physical)? else {
             return Ok(None);
-        }
-        let absolute_pos = current_physical + kv.compact_offset;
-        let p_q = absolute_pos as f32;
+        };
+        let p_q = position_plan.absolute_pos as f32;
 
         enum Mode { Q8, Asym2, Asym3, Asym4 }
         let (mode, k_bytes_per_pos) = if kv.quant_asym3 {
@@ -906,9 +974,35 @@ impl EvictionCtx {
             last_retain = retain;
         }
 
-        kv.compact_offset += current_physical - self.budget;
+        kv.compact_offset = position_plan.new_compact_offset;
         self.eviction_count.set(self.eviction_count.get() + 1);
-        Ok(Some(EvictionResult { new_physical: self.budget, retain_mask: last_retain }))
+        Ok(Some(EvictionResult {
+            new_physical: position_plan.new_physical,
+            retain_mask: last_retain,
+        }))
+    }
+
+    pub(crate) fn position_plan(
+        &self,
+        kv: &crate::llama::KvCache,
+        current_physical: usize,
+    ) -> HipResult<Option<EvictionPositionPlan>> {
+        if kv.physical_cap < self.trigger {
+            return Err(HipError::new(
+                0,
+                &format!(
+                    "KV physical_cap ({}) is below eviction trigger ({})",
+                    kv.physical_cap, self.trigger
+                ),
+            ));
+        }
+        plan_eviction_position(
+            self.budget,
+            self.trigger,
+            kv.physical_cap.min(self.max_seq),
+            current_physical,
+            kv.compact_offset,
+        )
     }
 
     /// Release all GPU buffers held by the context. Consumed by value;
@@ -947,6 +1041,52 @@ pub fn pearson(x: &[f32], y: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eviction_schedule_validates_trigger_capacity() {
+        assert_eq!(validate_eviction_schedule(128, 32, 164).unwrap(), 160);
+        assert_eq!(validate_eviction_schedule(128, 0, 164).unwrap(), 128);
+        assert!(validate_eviction_schedule(0, 32, 164).is_err());
+        assert!(validate_eviction_schedule(128, 37, 164).is_err());
+        assert!(validate_eviction_schedule(usize::MAX, 1, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn eviction_position_waits_until_trigger() {
+        let plan = plan_eviction_position(128, 160, 164, 159, 500).unwrap();
+        assert_eq!(plan, None);
+    }
+
+    #[test]
+    fn eviction_position_preserves_next_absolute_position() {
+        let first = plan_eviction_position(128, 160, 164, 160, 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.absolute_pos, 160);
+        assert_eq!(first.new_physical, 128);
+        assert_eq!(first.new_compact_offset, 32);
+        assert_eq!(first.new_physical + first.new_compact_offset, first.absolute_pos);
+
+        let second = plan_eviction_position(
+            128,
+            160,
+            164,
+            160,
+            first.new_compact_offset,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(second.absolute_pos, 192);
+        assert_eq!(second.new_physical, 128);
+        assert_eq!(second.new_compact_offset, 64);
+        assert_eq!(second.new_physical + second.new_compact_offset, second.absolute_pos);
+    }
+
+    #[test]
+    fn eviction_position_rejects_capacity_and_offset_overflow() {
+        assert!(plan_eviction_position(128, 160, 164, 165, 0).is_err());
+        assert!(plan_eviction_position(128, 160, 164, 160, usize::MAX).is_err());
+    }
 
     #[test]
     fn accumulator_means_one_sample() {
