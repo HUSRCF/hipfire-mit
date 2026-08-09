@@ -381,3 +381,71 @@ decode tok/s.
 - Decision: accept the strict HFQ boundary contract as the first M3
   deliverable. Numerical quantization fidelity and cache-path milestones
   remain open.
+
+## M3: packed KV allocation contract — 2026-08-10
+
+### Run identity
+
+- Regression parent: `a7afe07`.
+- Runtime candidate commit:
+  `c3dfe24fd2734cfef21f30b2cac6e7f3daab5d8d`.
+- Benchmark-freshness follow-up:
+  `217645bef42d1ca79e3bf4ab4a35c61b96785e20`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Candidate daemon md5: `16eaa9cf4d97c6e2243ff6daaa610015`.
+- Candidate DFlash binary md5: `e4a88c2314c547a0a1a4cc0ad3cad694`.
+- Explicitly rebuilt candidate benchmark md5:
+  `bf1c2381938316a295487c5984291d82`.
+- Environment: `ROCR_VISIBLE_DEVICES=0`, `HIP_VISIBLE_DEVICES=0`,
+  `HIPFIRE_MODELS_DIR=/home/husrcf/.hipfire/models`,
+  `HIPFIRE_BASELINE_ARCH=gfx1100-w7900`, and ROCm 7.14 runtime directories
+  prepended to `LD_LIBRARY_PATH`.
+- Correctness commands: `cargo test -p hipfire-runtime --lib`,
+  `./scripts/cleanroom-gate.sh`, `./scripts/coherence-gate.sh`, and
+  `./scripts/coherence-gate-dflash.sh`.
+- Performance command: `./scripts/speed-gate.sh --fast --verbose`. The
+  benchmark was explicitly rebuilt before the three recorded observations;
+  each observation is still the gate's best of two executions using its
+  deterministic synthetic token IDs `0..31`.
+
+### Measurements
+
+| Metric | Committed floor | Candidate observation 1 | Candidate observation 2 | Candidate observation 3 | Candidate median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1308.3 | 1262.2 | 1288.1 | 1288.1 |
+| 4B MQ4 decode tok/s | 140.9 | 141.0 | 140.6 | 140.4 | 140.6 |
+
+After the freshness fix, an additional end-to-end gate run passed at 1259.2
+prefill tok/s and 140.7 decode tok/s while first invoking Cargo's current-
+target check.
+
+### Decision
+
+- Candidate median delta: +4.95% prefill and -0.21% decode. Every observation
+  passes the committed 5% regression tolerance. The runtime change performs
+  checked layout arithmetic only during cache construction, so these values
+  are recorded as non-regression and no speedup is attributed to it.
+- Correctness: all 177 `hipfire-runtime` library tests pass. Five new tests
+  pin Q8 and packed 2/3/4-bit per-head strides, F32 allocation rounding,
+  physical-cap scaling, invalid dimensions/capacities, and host-size overflow.
+  The clean-room SPDX/source gate and `git diff --check` pass.
+- Standard GPU0 coherence: four available cells complete without hard errors;
+  outputs were manually checked for fluency, task relevance, tool-call JSON,
+  and repetition. Reports: `/tmp/coherence-kvlayout.md` and commit-hook rerun
+  `/tmp/coherence-20260810-011300.md`.
+- DFlash/DDTree GPU0 coherence: all four cells report `ok=true` and
+  `soft_warn=false`; prose and code were manually checked. Report:
+  `/tmp/coherence-dflash-kvlayout.md`.
+- Agentic commit-hook quality: one Qwen 3.6 27B cell passes with valid
+  `name='read'` JSON and zero warnings. Report:
+  `/tmp/agentic-gate-20260810-011324.md`.
+- Evidence hygiene: three earlier speed-gate prechecks are excluded because
+  their existing benchmark executable still had md5
+  `e40e29f8a452441bf1d912d52eb6b429`, predating the runtime candidate. Commit
+  `217645bef42d1ca79e3bf4ab4a35c61b96785e20` closes that harness gap by always
+  asking Cargo to validate target freshness and by building the DFlash target
+  as well in non-fast mode.
+- Decision: accept the shared packed-KV allocation contract as the second M3
+  deliverable. Numerical cache fidelity under long-context eviction and the
+  remaining quantization-format milestones remain open.

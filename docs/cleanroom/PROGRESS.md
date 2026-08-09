@@ -16,7 +16,7 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M0: governance and reproducibility | 1-2 | complete | MIT/source gate, clean-room PR declaration, build and performance baselines |
 | M1: speculative decode foundation | 3-8 | complete | shared greedy acceptance contract, semantic statistics, deterministic tests, and GPU0 correctness/throughput acceptance |
 | M2: release and device execution | 10-18 | in progress | reproducible delivery and the device-execution foundation are complete; remaining quantization, maintenance, and integration directions are still open |
-| M3: quantization and context paths | 19-39 | in progress | strict HFQ file-boundary validation is complete; numerical format/quality and cache continuity/performance work remains open |
+| M3: quantization and context paths | 19-39 | in progress | strict HFQ file-boundary validation and a shared packed-KV allocation contract are complete; numerical fidelity and long-context continuity work remains open |
 
 ## M0 evidence
 
@@ -176,4 +176,43 @@ observations have median 1387.0 prefill tok/s and 141.1 decode tok/s. The
 prefill reading is not attributed to the parser because inference timing
 starts after the one-time file parse; it is recorded only as non-regression.
 Detailed reports and measurements are in
+`docs/cleanroom/PERFORMANCE_RECORD.md`.
+
+### Packed KV allocation contract
+
+Direction rows 20-27 expose the high-level requirement that context state
+remain capacity-efficient without losing numerical continuity. An audit of
+the permitted MIT snapshot found the Q8 and rotated 2/3/4-bit cache byte
+layouts repeated across single-GPU, filtered-layer, capped, and multi-GPU
+constructors. The repeated arithmetic used assertions and unchecked host-size
+multiplication, so equivalent modes could drift in allocation size and an
+invalid configuration could panic or overflow before allocation.
+
+Commit `c3dfe24fd2734cfef21f30b2cac6e7f3daab5d8d` introduces one pure
+host-side packed-layout contract without changing the cache payload format,
+rotation parameters, kernels, or dispatch. It validates positive dimensions,
+32-element Q8 block alignment, the established 128/256-dimensional 2/4-bit
+and 256-dimensional 3-bit shapes, physical capacity within the logical
+context, and every multiplication and F32-storage rounding step. All matching
+single-GPU, filtered, capped, and multi-GPU constructors now consume the same
+computed K/V element counts and per-head byte strides and return a fallible
+HIP error for invalid inputs instead of asserting.
+
+Five deterministic tests pin exact Q8 and asymmetric byte counts, rounding,
+physical-cap scaling, invalid shape/capacity rejection, and host address-space
+overflow. All 177 `hipfire-runtime` library tests pass. GPU0 short coherence
+and the four-cell DFlash/DDTree battery pass; every available output was
+manually checked and all speculative detectors report `ok=true` and
+`soft_warn=false`. The commit-hook agentic cell also passes with valid tool
+JSON and no warning.
+
+Three measurements from the explicitly rebuilt candidate benchmark have a
+median 1288.1 prefill tok/s and 140.6 decode tok/s, respectively +4.95% and
+-0.21% versus the committed W7900 floor. This is recorded as non-regression,
+not as a speedup caused by host-side allocation validation. During evidence
+collection, the speed gate was found to accept an existing but stale linked
+benchmark; commit
+`217645bef42d1ca79e3bf4ab4a35c61b96785e20` now always asks Cargo to validate
+freshness and only relinks stale targets before taking measurements. Detailed
+binary hashes, reports, and observations are in
 `docs/cleanroom/PERFORMANCE_RECORD.md`.
