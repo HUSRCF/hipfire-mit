@@ -16,7 +16,7 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M0: governance and reproducibility | 1-2 | complete | MIT/source gate, clean-room PR declaration, build and performance baselines |
 | M1: speculative decode foundation | 3-8 | complete | shared greedy acceptance contract, semantic statistics, deterministic tests, and GPU0 correctness/throughput acceptance |
 | M2: release and device execution | 10-18 | in progress | reproducible delivery and the device-execution foundation are complete; remaining quantization, maintenance, and integration directions are still open |
-| M3: quantization and context paths | 19-39 | in progress | strict HFQ file-boundary validation and a shared packed-KV allocation contract are complete; numerical fidelity and long-context continuity work remains open |
+| M3: quantization and context paths | 19-39 | in progress | strict HFQ boundaries, shared packed-KV allocation, and checked long-context position continuity are complete; quantization numerical fidelity remains open |
 
 ## M0 evidence
 
@@ -215,4 +215,40 @@ benchmark; commit
 `217645bef42d1ca79e3bf4ab4a35c61b96785e20` now always asks Cargo to validate
 freshness and only relinks stale targets before taking measurements. Detailed
 binary hashes, reports, and observations are in
+`docs/cleanroom/PERFORMANCE_RECORD.md`.
+
+### Long-context eviction position contract
+
+Direction rows 20-27 also require repeated cache compaction to preserve the
+logical token position while physical storage is recycled. The permitted MIT
+snapshot maintained that position with repeated unchecked additions in the
+plain TriAttention and CASK paths and asserted the eviction schedule during
+construction. That left host-size overflow and mismatched physical-capacity
+inputs outside the fallible runtime contract.
+
+Commit `4c2733d99dcf7fda94f22d4b449ba06837c50f07` introduces one checked
+position plan shared by both policies. It validates the positive retention
+budget, the overflow-safe `budget + beta` trigger (including the documented
+`beta = 0` configuration), current physical capacity, absolute-position
+addition, and compact-offset addition before dispatch. A successful plan
+enforces `new_physical + new_compact_offset = old_physical + old_offset`, and
+cache state is updated only after every layer compacts successfully.
+
+Four deterministic tests cover schedule capacity and overflow, below-trigger
+behavior, two successive evictions, current-capacity rejection, and offset
+overflow. All 181 runtime library tests and all runtime examples with the
+DeltaNet feature pass; the clean-room source/license gate passes.
+
+On GPU0, a 9B asym3 tight-cache run used 42 physical slots for a 122-token
+prompt plus 32 generated tokens and completed 15 TriAttention evictions. A
+separate Q8 CASK run completed five m-fold evictions and ended with
+`compact_offset = 40`. The standard four-cell coherence battery and the
+four-cell DFlash/DDTree battery pass after manual output review; every
+speculative detector reports `ok=true` and `soft_warn=false`.
+
+Three freshly linked speed-gate observations have median 1291.1 prefill tok/s
+and 140.4 decode tok/s, respectively +5.20% and -0.35% versus the committed
+W7900 floor. This is recorded only as non-regression because the new checks
+execute on the opt-in eviction path, not the measured default benchmark path.
+Full run identities, binary hashes, and reports are in
 `docs/cleanroom/PERFORMANCE_RECORD.md`.

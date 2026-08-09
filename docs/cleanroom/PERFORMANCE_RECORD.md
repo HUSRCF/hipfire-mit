@@ -449,3 +449,72 @@ target check.
 - Decision: accept the shared packed-KV allocation contract as the second M3
   deliverable. Numerical cache fidelity under long-context eviction and the
   remaining quantization-format milestones remain open.
+
+---
+
+## M3: long-context eviction position continuity — 2026-08-10
+
+### Run identity
+
+- Regression parent: `0f7b4a1`.
+- Candidate commit: `4c2733d99dcf7fda94f22d4b449ba06837c50f07`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Candidate benchmark md5: `2b127348de60a6dce7c412a7d7b03641`.
+- Candidate DFlash md5: `fe1ee567a4b1ab04363090f8bb15696d`.
+- Candidate TriAttention long-context md5:
+  `ab9caa836c9a00ecf2aa1c9c22c0ae92`.
+- Candidate CASK inference md5: `4abf326e5d2216dfd0315850981b4d58`.
+- Environment: `ROCR_VISIBLE_DEVICES=0`, `HIP_VISIBLE_DEVICES=0`,
+  `HIPFIRE_MODELS_DIR=/home/husrcf/.hipfire/models`,
+  `HIPFIRE_BASELINE_ARCH=gfx1100-w7900`, and ROCm 7.14 runtime directories
+  prepended to `LD_LIBRARY_PATH`. Every GPU command was serialized by
+  `scripts/gpu-lock.sh`.
+- Correctness commands: `cargo test -p hipfire-runtime --lib`,
+  `cargo check -p hipfire-runtime --examples --features deltanet`,
+  `./scripts/cleanroom-gate.sh`, `./scripts/coherence-gate.sh`, and
+  `./scripts/coherence-gate-dflash.sh`.
+- Performance command: three fresh invocations of
+  `./scripts/speed-gate.sh --fast`. Each observation is the gate's best of two
+  executions using deterministic synthetic token IDs `0..31`.
+
+### Measurements
+
+| Metric | Committed floor | Candidate observation 1 | Candidate observation 2 | Candidate observation 3 | Candidate median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1369.0 | 1291.1 | 1261.3 | 1291.1 |
+| 4B MQ4 decode tok/s | 140.9 | 141.0 | 140.4 | 139.8 | 140.4 |
+
+### Decision
+
+- Candidate median delta: +5.20% prefill and -0.35% decode. All three runs
+  pass the committed 5% regression tolerance. The changed policy is opt-in
+  and absent from this benchmark, so no implementation-caused speedup is
+  claimed.
+- Correctness: all 181 `hipfire-runtime` library tests pass, including four
+  new pure tests for valid and invalid schedules, repeated position
+  continuity, capacity mismatch, and host-offset overflow. Every runtime
+  example compiles with DeltaNet enabled, and the clean-room gate passes.
+- Plain eviction: the Qwen 3.5 9B asym3 long-context demo processed a
+  122-token prompt and 32 generated tokens with a fixed 42-position cache,
+  completing 15 evictions. After prefill it reported `physical=34` and
+  `compact_offset=88`; the process exited successfully.
+- CASK eviction: the Qwen 3.5 9B Q8 run used `budget=32`, `beta=8`,
+  `core_frac=0.5`, and `fold_m=2`, completing five evictions and ending with
+  `compact_offset=40`. Its generated response remained coherent.
+- The temporary 9B sidecar was saved after 64 calibration tokens solely to
+  exercise the eviction dispatches. The calibration tool's later validation
+  phase hit the existing HIP stream-capture error 906, so neither its reported
+  MRL nor downstream sidecar quality is treated as evidence.
+- Standard GPU0 coherence: four available cells complete without hard errors;
+  outputs were manually checked for task relevance, valid tool JSON, and
+  repetition. Report: `/tmp/coherence-eviction-position.md`.
+- DFlash/DDTree GPU0 coherence: all four cells report `ok=true` and
+  `soft_warn=false`; prose and code outputs were manually reviewed. Report:
+  `/tmp/coherence-dflash-eviction-position.md`.
+- The two coherence reports identify parent `0f7b4a1` because validation ran
+  before the source commit; their binaries were freshly rebuilt from the
+  candidate working tree recorded above.
+- Decision: accept checked repeated-eviction position continuity as the third
+  M3 deliverable. Quantization numerical-fidelity and the remaining format
+  milestones stay open.
