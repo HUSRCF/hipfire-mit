@@ -16,7 +16,7 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M0: governance and reproducibility | 1-2 | complete | MIT/source gate, clean-room PR declaration, build and performance baselines |
 | M1: speculative decode foundation | 3-8 | complete | shared greedy acceptance contract, semantic statistics, deterministic tests, and GPU0 correctness/throughput acceptance |
 | M2: release and device execution | 10-18 | in progress | reproducible delivery and the device-execution foundation are complete; remaining quantization, maintenance, and integration directions are still open |
-| M3: quantization and context paths | 19-39 | planned | format/quality tests and cache continuity/performance tests |
+| M3: quantization and context paths | 19-39 | in progress | strict HFQ file-boundary validation is complete; numerical format/quality and cache continuity/performance work remains open |
 
 ## M0 evidence
 
@@ -148,3 +148,32 @@ GPU0 performance observations for the final agentic batch have median 1288.8
 prefill tok/s and 141.6 decode tok/s, respectively +5.01% and +0.50% over the
 committed W7900 floor. Detailed quality reports and measurements are recorded
 in `docs/cleanroom/PERFORMANCE_RECORD.md`.
+
+## M3 evidence
+
+### HFQ file-boundary contract
+
+Commit `6088d29a2bc932cbb4b38be3ac1bb2d1299e04a5` replaces input-derived
+HFQ slicing and assertions with a checked, fallible version-1 parser. It
+validates the fixed header, ordered and host-representable offsets, metadata
+JSON syntax and object shape, header/index tensor-count agreement, bounded
+index records, UTF-8 and unique tensor names, checked cumulative payload
+ranges, and complete declared payloads before exposing any tensor slice.
+Metadata syntax is validated with a streaming ignored-value deserializer so
+the check does not allocate a second tokenizer/config tree during model load.
+
+Six new adversarial unit tests cover a valid multi-tensor file plus truncated
+headers, bad magic and versions, invalid offsets and metadata, impossible or
+mismatched counts, duplicate/non-UTF-8 names, and truncated index/payload
+data. All 172 `hipfire-runtime` library tests pass. Existing Qwen 3.5 MQ4,
+Qwen 3.6 MQ3, and MQ4 DFlash files pass CPU index reads; the MQ3 27B model
+also completes a GPU0 load, graph capture, short generation, and clean unload.
+
+The mandatory GPU0 short coherence battery and full DFlash/DDTree battery
+pass without hard errors or repetition warnings. The commit-hook agentic cell
+also passes with valid tool JSON and zero warnings. Three pre-commit speed
+observations have median 1387.0 prefill tok/s and 141.1 decode tok/s. The
+prefill reading is not attributed to the parser because inference timing
+starts after the one-time file parse; it is recorded only as non-regression.
+Detailed reports and measurements are in
+`docs/cleanroom/PERFORMANCE_RECORD.md`.

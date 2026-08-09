@@ -315,3 +315,69 @@ Copy this section for each performance-sensitive milestone.
   `/tmp/coherence-20260810-004208.md`.
 - Decision: accept the bounded empty-thinking recovery and close the 35B
   Hermes tool-selection reliability item without weakening the full gate.
+
+---
+
+## M3: HFQ file-boundary validation — 2026-08-10
+
+### Run identity
+
+- Regression parent: `28b5ca9`.
+- Candidate commit: `6088d29a2bc932cbb4b38be3ac1bb2d1299e04a5`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Candidate daemon md5: `fdd91a592cc126d291e3a83368e99c78`.
+- Candidate DFlash binary md5: `065b82554eebc9b12736f6c553f20201`.
+- Candidate benchmark binary md5:
+  `e40e29f8a452441bf1d912d52eb6b429`.
+- Compatibility files (read-only): Qwen 3.5 4B MQ4, Qwen 3.6 27B MQ3,
+  Qwen 3.5 27B MQ4, and Qwen 3.5 9B/27B MQ4 DFlash under
+  `/home/husrcf/.hipfire/models`.
+- Environment: `ROCR_VISIBLE_DEVICES=0`, `HIP_VISIBLE_DEVICES=0`,
+  `HIPFIRE_MODELS_DIR=/home/husrcf/.hipfire/models`, and ROCm 7.14 runtime
+  directories prepended to `LD_LIBRARY_PATH`.
+- Quality commands: `./scripts/coherence-gate.sh` and the full
+  `./scripts/coherence-gate-dflash.sh`, serialized by
+  `scripts/gpu-lock.sh`. The MQ3 smoke used the same lock and GPU binding.
+- Performance command: `./scripts/speed-gate.sh --fast --verbose` with
+  `HIPFIRE_BASELINE_ARCH=gfx1100-w7900`. Each observation is the gate's best
+  of two benchmark executions using deterministic synthetic token IDs
+  `0..31`; tokenizer and prompt bytes are not involved.
+
+### Measurements
+
+| Metric | Committed floor | Candidate observation 1 | Candidate observation 2 | Candidate observation 3 | Candidate median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1357.9 | 1391.4 | 1387.0 | 1387.0 |
+| 4B MQ4 decode tok/s | 140.9 | 141.1 | 141.1 | 139.9 | 141.1 |
+
+The commit-hook repetition also passed at 1279.3 prefill tok/s and 141.3
+decode tok/s.
+
+### Decision
+
+- Candidate median delta: +13.01% prefill and +0.14% decode; all observations
+  pass the committed regression tolerance. The parser executes before the
+  benchmark's inference timer, so the elevated prefill median is not claimed
+  as a code-caused performance gain.
+- Correctness: all 172 `hipfire-runtime` library tests pass. The six new HFQ
+  tests exercise valid parsing and malformed headers, versions, offsets,
+  metadata, counts, names, indices, and payload ranges without GPU access.
+- Compatibility: CPU index reads pass for qt=3 MQ4 embeddings, qt=17 MQ3
+  output weights, and qt=13 MQ4 DFlash weights. A Qwen 3.6 27B MQ3 GPU0 smoke
+  loaded 64 layers, captured its graph, emitted five tokens without a runtime
+  error, and unloaded cleanly. Its very short `The` answer is recorded only as
+  execution compatibility, not as a quality pass.
+- Standard GPU0 coherence: no hard errors or repetition loops; report
+  `/tmp/coherence-20260810-005247.md`. Two capped responses were incomplete
+  but remained on-topic and structurally valid. The commit-hook rerun also
+  passed; report `/tmp/coherence-20260810-005913.md`.
+- DFlash/DDTree GPU0 coherence: all four cells report `ok=true` and
+  `soft_warn=false`; prose and code outputs were manually checked for
+  attractors and structural repetition. Report:
+  `/tmp/coherence-dflash-20260810-005329.md`.
+- Agentic commit-hook quality: PASS with valid `name='read'` JSON and zero
+  warnings; report `/tmp/agentic-gate-20260810-005940.md`.
+- Decision: accept the strict HFQ boundary contract as the first M3
+  deliverable. Numerical quantization fidelity and cache-path milestones
+  remain open.
