@@ -1,9 +1,10 @@
 //! LLaMA model implementation using RDNA GPU compute.
 //! Supports loading from GGUF files and running inference.
+// SPDX-License-Identifier: MIT
 
 use crate::gguf::{GgmlType, GgufFile, TensorInfo};
 use crate::multi_gpu::Gpus;
-use hip_bridge::HipResult;
+use hip_bridge::{HipError, HipResult};
 use rdna_compute::{DType, Gpu, GpuTensor};
 use std::path::Path;
 
@@ -2972,6 +2973,126 @@ fn apply_rope_cpu(data: &mut [f32], n_heads: usize, head_dim: usize, pos: usize,
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PackedKvKind {
+    Q8,
+    Asym2,
+    Asym3,
+    Asym4,
+}
+
+/// Host-side allocation contract shared by single-GPU, filtered, and
+/// multi-GPU packed KV constructors. Kernel offsets are expressed in bytes,
+/// while allocations use F32-sized elements as raw storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PackedKvLayout {
+    kv_dim: usize,
+    k_bytes_per_head: usize,
+    v_bytes_per_head: usize,
+    k_elems: usize,
+    v_elems: usize,
+}
+
+impl PackedKvLayout {
+    fn new(
+        kind: PackedKvKind,
+        n_kv_heads: usize,
+        head_dim: usize,
+        max_seq_len: usize,
+        physical_cap: usize,
+    ) -> HipResult<Self> {
+        if n_kv_heads == 0 {
+            return Err(HipError::new(0, "packed KV cache requires n_kv_heads > 0"));
+        }
+        if physical_cap == 0 || physical_cap > max_seq_len {
+            return Err(HipError::new(
+                0,
+                &format!(
+                    "packed KV physical_cap ({physical_cap}) must be in (0, max_seq_len={max_seq_len}]"
+                ),
+            ));
+        }
+        if head_dim == 0 || head_dim % 32 != 0 {
+            return Err(HipError::new(
+                0,
+                &format!("packed KV head_dim ({head_dim}) must be a positive multiple of 32"),
+            ));
+        }
+        match kind {
+            PackedKvKind::Q8 => {}
+            PackedKvKind::Asym3 if head_dim != 256 => {
+                return Err(HipError::new(
+                    0,
+                    &format!("asym3 KV cache requires head_dim=256, got {head_dim}"),
+                ));
+            }
+            PackedKvKind::Asym2 | PackedKvKind::Asym4
+                if head_dim != 128 && head_dim != 256 =>
+            {
+                return Err(HipError::new(
+                    0,
+                    &format!(
+                        "asym2/asym4 KV cache requires head_dim=128 or 256, got {head_dim}"
+                    ),
+                ));
+            }
+            _ => {}
+        }
+
+        let checked = |value: Option<usize>, label: &str| {
+            value.ok_or_else(|| {
+                HipError::new(0, &format!("packed KV {label} overflows host address space"))
+            })
+        };
+        let kv_dim = checked(n_kv_heads.checked_mul(head_dim), "kv_dim")?;
+        let q8_bytes_per_head = checked(
+            (head_dim / 32).checked_mul(34),
+            "Q8 bytes per head",
+        )?;
+        let k_bytes_per_head = match kind {
+            PackedKvKind::Q8 => q8_bytes_per_head,
+            PackedKvKind::Asym2 => checked(
+                head_dim.checked_div(4).and_then(|n| n.checked_add(4)),
+                "asym2 K bytes per head",
+            )?,
+            PackedKvKind::Asym3 => checked(
+                head_dim
+                    .checked_mul(3)
+                    .map(|n| n / 8)
+                    .and_then(|n| n.checked_add(4)),
+                "asym3 K bytes per head",
+            )?,
+            PackedKvKind::Asym4 => checked(
+                head_dim.checked_div(2).and_then(|n| n.checked_add(4)),
+                "asym4 K bytes per head",
+            )?,
+        };
+        let v_bytes_per_head = q8_bytes_per_head;
+        let elems = |bytes_per_head: usize, label: &str| -> HipResult<usize> {
+            let bytes_per_pos = checked(
+                n_kv_heads.checked_mul(bytes_per_head),
+                &format!("{label} bytes per position"),
+            )?;
+            let total_bytes = checked(
+                physical_cap.checked_mul(bytes_per_pos),
+                &format!("{label} allocation bytes"),
+            )?;
+            Ok(checked(
+                total_bytes.checked_add(3),
+                &format!("{label} allocation rounding"),
+            )? / 4)
+        };
+
+        Ok(Self {
+            kv_dim,
+            k_bytes_per_head,
+            v_bytes_per_head,
+            k_elems: elems(k_bytes_per_head, "K")?,
+            v_elems: elems(v_bytes_per_head, "V")?,
+        })
+    }
+}
+
 /// GPU-resident KV cache for autoregressive generation.
 ///
 /// Two capacity axes live here:
@@ -3092,20 +3213,16 @@ impl KvCache {
         gpu: &mut Gpu, n_layers: usize, n_kv_heads: usize, head_dim: usize,
         max_seq_len: usize, physical_cap: usize,
     ) -> HipResult<Self> {
-        assert!(physical_cap > 0 && physical_cap <= max_seq_len,
-            "physical_cap ({physical_cap}) must be in (0, max_seq_len={max_seq_len}]");
-        let kv_dim = n_kv_heads * head_dim;
-        let blocks_per_head = head_dim / 32;
-        let total_blocks = n_kv_heads * blocks_per_head;
-        let cache_bytes = physical_cap * total_blocks * 34;
-        let cache_elems = (cache_bytes + 3) / 4;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Q8, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
         let mut k_gpu = Vec::with_capacity(n_layers);
         let mut v_gpu = Vec::with_capacity(n_layers);
         for _ in 0..n_layers {
-            k_gpu.push(gpu.zeros(&[cache_elems], DType::F32)?);
-            v_gpu.push(gpu.zeros(&[cache_elems], DType::F32)?);
+            k_gpu.push(gpu.zeros(&[layout.k_elems], DType::F32)?);
+            v_gpu.push(gpu.zeros(&[layout.v_elems], DType::F32)?);
         }
-        Ok(Self { k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim, max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim, quantized: true, quant_q8: true, quant_int8: false, quant_hfq4: false, quant_asym4: false, quant_asym3: false, quant_asym2: false, quant_fwht: false, boundary_layers: 0, givens_cos: None, givens_sin: None, layer_is_boundary: vec![], compact_offset: 0 })
+        Ok(Self { k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim, max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim, quantized: true, quant_q8: true, quant_int8: false, quant_hfq4: false, quant_asym4: false, quant_asym3: false, quant_asym2: false, quant_fwht: false, boundary_layers: 0, givens_cos: None, givens_sin: None, layer_is_boundary: vec![], compact_offset: 0 })
     }
 
     /// Helper: allocate K/V Vecs, skipping layers where is_kv_layer[i] is false
@@ -3153,18 +3270,16 @@ impl KvCache {
         gpu: &mut Gpu, is_kv_layer: &[bool], n_kv_heads: usize, head_dim: usize,
         max_seq_len: usize, physical_cap: usize,
     ) -> HipResult<Self> {
-        assert!(physical_cap > 0 && physical_cap <= max_seq_len,
-            "physical_cap ({physical_cap}) must be in (0, max_seq_len={max_seq_len}]");
-        let kv_dim = n_kv_heads * head_dim;
-        let blocks_per_head = head_dim / 32;
-        let total_blocks = n_kv_heads * blocks_per_head;
-        let cache_bytes = physical_cap * total_blocks * 34;
-        let cache_elems = (cache_bytes + 3) / 4;
-        let (k_gpu, v_gpu) = Self::alloc_k_v_filtered(gpu, cache_elems, cache_elems, is_kv_layer)?;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Q8, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
+        let (k_gpu, v_gpu) = Self::alloc_k_v_filtered(
+            gpu, layout.k_elems, layout.v_elems, is_kv_layer,
+        )?;
         let n_kv = is_kv_layer.iter().filter(|b| **b).count();
         eprintln!("KV cache: q8 ({n_kv}/{} layers carry KV, others placeholder)", is_kv_layer.len());
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: true, quant_int8: false, quant_hfq4: false,
             quant_asym4: false, quant_asym3: false, quant_asym2: false, quant_fwht: false,
@@ -3281,16 +3396,13 @@ impl KvCache {
         gpu: &mut Gpu, is_kv_layer: &[bool], n_kv_heads: usize, head_dim: usize,
         max_seq_len: usize,
     ) -> HipResult<Self> {
-        assert!(head_dim == 128 || head_dim == 256, "asym4 requires head_dim=128 or 256");
-        assert!(head_dim % 32 == 0);
         let physical_cap = max_seq_len;
-        let kv_dim = n_kv_heads * head_dim;
-        let k_bph = 4 + head_dim / 2;
-        let k_elems = (physical_cap * n_kv_heads * k_bph + 3) / 4;
-        let v_blocks_per_head = head_dim / 32;
-        let v_bpp = n_kv_heads * v_blocks_per_head * 34;
-        let v_elems = (physical_cap * v_bpp + 3) / 4;
-        let (k_gpu, v_gpu) = Self::alloc_k_v_filtered(gpu, k_elems, v_elems, is_kv_layer)?;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Asym4, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
+        let (k_gpu, v_gpu) = Self::alloc_k_v_filtered(
+            gpu, layout.k_elems, layout.v_elems, is_kv_layer,
+        )?;
         let n_blocks = head_dim / 2;
         let (cos_vals, sin_vals) = Self::gen_givens_angles(42, n_blocks);
         let cb: Vec<u8> = cos_vals.iter().flat_map(|v| v.to_ne_bytes()).collect();
@@ -3299,7 +3411,8 @@ impl KvCache {
         let st = gpu.alloc_tensor(&[n_blocks], DType::F32)?;
         gpu.hip.memcpy_htod(&ct.buf, &cb)?;
         gpu.hip.memcpy_htod(&st.buf, &sb)?;
-        let v_bph = v_bpp / n_kv_heads;
+        let k_bph = layout.k_bytes_per_head;
+        let v_bph = layout.v_bytes_per_head;
         let n_kv = is_kv_layer.iter().filter(|b| **b).count();
         eprintln!(
             "KV cache: asym4 filtered ({n_kv}/{} layers carry KV; K rotated-4b {k_bph}B + V Q8 {v_bph}B = {} B/head)",
@@ -3307,7 +3420,7 @@ impl KvCache {
             k_bph + v_bph,
         );
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: false, quant_int8: false, quant_hfq4: false,
             quant_asym4: true, quant_asym3: false, quant_asym2: false, quant_fwht: false,
@@ -3326,16 +3439,13 @@ impl KvCache {
         gpu: &mut Gpu, is_kv_layer: &[bool], n_kv_heads: usize, head_dim: usize,
         max_seq_len: usize,
     ) -> HipResult<Self> {
-        assert!(head_dim == 128 || head_dim == 256, "fwht4 requires head_dim=128 or 256");
-        assert!(head_dim % 32 == 0);
         let physical_cap = max_seq_len;
-        let kv_dim = n_kv_heads * head_dim;
-        let k_bph = 4 + head_dim / 2;
-        let k_elems = (physical_cap * n_kv_heads * k_bph + 3) / 4;
-        let v_blocks_per_head = head_dim / 32;
-        let v_bpp = n_kv_heads * v_blocks_per_head * 34;
-        let v_elems = (physical_cap * v_bpp + 3) / 4;
-        let (k_gpu, v_gpu) = Self::alloc_k_v_filtered(gpu, k_elems, v_elems, is_kv_layer)?;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Asym4, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
+        let (k_gpu, v_gpu) = Self::alloc_k_v_filtered(
+            gpu, layout.k_elems, layout.v_elems, is_kv_layer,
+        )?;
         // fwht_shfl_forward operates on 128 elements regardless of head_dim;
         // signs are shared across the hd=256 two-half rotation. Seeds (42,
         // 1042) match the MQ4 weight-FWHT convention.
@@ -3348,7 +3458,8 @@ impl KvCache {
         let s2 = gpu.alloc_tensor(&[n_signs], DType::F32)?;
         gpu.hip.memcpy_htod(&s1.buf, &s1_bytes)?;
         gpu.hip.memcpy_htod(&s2.buf, &s2_bytes)?;
-        let v_bph = v_bpp / n_kv_heads;
+        let k_bph = layout.k_bytes_per_head;
+        let v_bph = layout.v_bytes_per_head;
         let n_kv = is_kv_layer.iter().filter(|b| **b).count();
         eprintln!(
             "KV cache: fwht4 filtered ({n_kv}/{} layers carry KV; K FWHT-4b {k_bph}B + V Q8 {v_bph}B = {} B/head)",
@@ -3356,7 +3467,7 @@ impl KvCache {
             k_bph + v_bph,
         );
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: false, quant_int8: false, quant_hfq4: false,
             quant_asym4: true, quant_asym3: false, quant_asym2: false, quant_fwht: true,
@@ -3371,22 +3482,15 @@ impl KvCache {
         gpu: &mut Gpu, n_layers: usize, n_kv_heads: usize, head_dim: usize,
         max_seq_len: usize, physical_cap: usize,
     ) -> HipResult<Self> {
-        assert!(head_dim == 128 || head_dim == 256, "asym4 requires head_dim=128 or 256");
-        assert!(head_dim % 32 == 0);
-        assert!(physical_cap > 0 && physical_cap <= max_seq_len,
-            "physical_cap ({physical_cap}) must be in (0, max_seq_len={max_seq_len}]");
-        let kv_dim = n_kv_heads * head_dim;
-        let k_bph = 4 + head_dim / 2;
-        let k_elems = (physical_cap * n_kv_heads * k_bph + 3) / 4;
-        let v_blocks_per_head = head_dim / 32;
-        let v_bpp = n_kv_heads * v_blocks_per_head * 34;
-        let v_elems = (physical_cap * v_bpp + 3) / 4;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Asym4, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
 
         let mut k_gpu = Vec::with_capacity(n_layers);
         let mut v_gpu = Vec::with_capacity(n_layers);
         for _ in 0..n_layers {
-            k_gpu.push(gpu.zeros(&[k_elems], DType::F32)?);
-            v_gpu.push(gpu.zeros(&[v_elems], DType::F32)?);
+            k_gpu.push(gpu.zeros(&[layout.k_elems], DType::F32)?);
+            v_gpu.push(gpu.zeros(&[layout.v_elems], DType::F32)?);
         }
         let n_blocks = head_dim / 2;
         let (cos_vals, sin_vals) = Self::gen_givens_angles(42, n_blocks);
@@ -3396,11 +3500,12 @@ impl KvCache {
         let st = gpu.alloc_tensor(&[n_blocks], DType::F32)?;
         gpu.hip.memcpy_htod(&ct.buf, &cb)?;
         gpu.hip.memcpy_htod(&st.buf, &sb)?;
-        let v_bph = v_bpp / n_kv_heads;
+        let k_bph = layout.k_bytes_per_head;
+        let v_bph = layout.v_bytes_per_head;
         eprintln!("KV cache: asym4 (K rotated-4b {k_bph}B + V Q8 {v_bph}B = {} B/head, {:.1}x vs fp32)",
             k_bph + v_bph, (head_dim * 4 * 2) as f64 / (k_bph + v_bph) as f64);
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: false, quant_int8: false, quant_hfq4: false,
             quant_asym4: true, quant_asym3: false, quant_asym2: false, quant_fwht: false,
@@ -3425,22 +3530,15 @@ impl KvCache {
         gpu: &mut Gpu, n_layers: usize, n_kv_heads: usize, head_dim: usize,
         max_seq_len: usize, physical_cap: usize,
     ) -> HipResult<Self> {
-        assert!(head_dim == 128 || head_dim == 256, "fwht4 requires head_dim=128 or 256");
-        assert!(head_dim % 32 == 0);
-        assert!(physical_cap > 0 && physical_cap <= max_seq_len,
-            "physical_cap ({physical_cap}) must be in (0, max_seq_len={max_seq_len}]");
-        let kv_dim = n_kv_heads * head_dim;
-        let k_bph = 4 + head_dim / 2;
-        let k_elems = (physical_cap * n_kv_heads * k_bph + 3) / 4;
-        let v_blocks_per_head = head_dim / 32;
-        let v_bpp = n_kv_heads * v_blocks_per_head * 34;
-        let v_elems = (physical_cap * v_bpp + 3) / 4;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Asym4, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
 
         let mut k_gpu = Vec::with_capacity(n_layers);
         let mut v_gpu = Vec::with_capacity(n_layers);
         for _ in 0..n_layers {
-            k_gpu.push(gpu.zeros(&[k_elems], DType::F32)?);
-            v_gpu.push(gpu.zeros(&[v_elems], DType::F32)?);
+            k_gpu.push(gpu.zeros(&[layout.k_elems], DType::F32)?);
+            v_gpu.push(gpu.zeros(&[layout.v_elems], DType::F32)?);
         }
         // fwht_shfl_forward operates on 128 elements regardless of head_dim
         // (hd=256 is processed as 2 halves with the same signs reused).
@@ -3456,11 +3554,12 @@ impl KvCache {
         let s2 = gpu.alloc_tensor(&[n_signs], DType::F32)?;
         gpu.hip.memcpy_htod(&s1.buf, &s1_bytes)?;
         gpu.hip.memcpy_htod(&s2.buf, &s2_bytes)?;
-        let v_bph = v_bpp / n_kv_heads;
+        let k_bph = layout.k_bytes_per_head;
+        let v_bph = layout.v_bytes_per_head;
         eprintln!("KV cache: fwht4 (K FWHT-4b {k_bph}B + V Q8 {v_bph}B = {} B/head, {:.1}x vs fp32)",
             k_bph + v_bph, (head_dim * 4 * 2) as f64 / (k_bph + v_bph) as f64);
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: false, quant_int8: false, quant_hfq4: false,
             quant_asym4: true, quant_asym3: false, quant_asym2: false, quant_fwht: true,
@@ -3496,17 +3595,12 @@ impl KvCache {
         gpu: &mut Gpu, is_kv_layer: &[bool], n_kv_heads: usize, head_dim: usize,
         max_seq_len: usize, physical_cap: usize,
     ) -> HipResult<Self> {
-        assert!(head_dim == 256, "asym3 currently requires head_dim=256 (Qwen 3.5)");
-        assert!(head_dim % 32 == 0);
-        assert!(physical_cap > 0 && physical_cap <= max_seq_len,
-            "physical_cap ({physical_cap}) must be in (0, max_seq_len={max_seq_len}]");
-        let kv_dim = n_kv_heads * head_dim;
-        let k_bph = 4 + (head_dim * 3) / 8;
-        let k_elems = (physical_cap * n_kv_heads * k_bph + 3) / 4;
-        let v_blocks_per_head = head_dim / 32;
-        let v_bpp = n_kv_heads * v_blocks_per_head * 34;
-        let v_elems = (physical_cap * v_bpp + 3) / 4;
-        let (k_gpu, v_gpu) = Self::alloc_k_v_filtered(gpu, k_elems, v_elems, is_kv_layer)?;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Asym3, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
+        let (k_gpu, v_gpu) = Self::alloc_k_v_filtered(
+            gpu, layout.k_elems, layout.v_elems, is_kv_layer,
+        )?;
         let n_blocks = head_dim / 2;
         let (cos_vals, sin_vals) = Self::gen_givens_angles(42, n_blocks);
         let cb: Vec<u8> = cos_vals.iter().flat_map(|v| v.to_ne_bytes()).collect();
@@ -3515,7 +3609,8 @@ impl KvCache {
         let st = gpu.alloc_tensor(&[n_blocks], DType::F32)?;
         gpu.hip.memcpy_htod(&ct.buf, &cb)?;
         gpu.hip.memcpy_htod(&st.buf, &sb)?;
-        let v_bph = v_bpp / n_kv_heads;
+        let k_bph = layout.k_bytes_per_head;
+        let v_bph = layout.v_bytes_per_head;
         let n_kv = is_kv_layer.iter().filter(|b| **b).count();
         eprintln!(
             "KV cache: asym3 filtered ({n_kv}/{} layers carry KV; K rotated-3b {k_bph}B + V Q8 {v_bph}B = {} B/head, physical_cap={physical_cap} / max_seq={max_seq_len})",
@@ -3523,7 +3618,7 @@ impl KvCache {
             k_bph + v_bph,
         );
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: false, quant_int8: false, quant_hfq4: false,
             quant_asym4: false, quant_asym3: true, quant_asym2: false, quant_fwht: false,
@@ -3540,16 +3635,13 @@ impl KvCache {
         gpu: &mut Gpu, is_kv_layer: &[bool], n_kv_heads: usize, head_dim: usize,
         max_seq_len: usize,
     ) -> HipResult<Self> {
-        assert!(head_dim == 256, "fwht3 currently requires head_dim=256 (Qwen 3.5)");
-        assert!(head_dim % 32 == 0);
         let physical_cap = max_seq_len;
-        let kv_dim = n_kv_heads * head_dim;
-        let k_bph = 4 + (head_dim * 3) / 8;
-        let k_elems = (physical_cap * n_kv_heads * k_bph + 3) / 4;
-        let v_blocks_per_head = head_dim / 32;
-        let v_bpp = n_kv_heads * v_blocks_per_head * 34;
-        let v_elems = (physical_cap * v_bpp + 3) / 4;
-        let (k_gpu, v_gpu) = Self::alloc_k_v_filtered(gpu, k_elems, v_elems, is_kv_layer)?;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Asym3, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
+        let (k_gpu, v_gpu) = Self::alloc_k_v_filtered(
+            gpu, layout.k_elems, layout.v_elems, is_kv_layer,
+        )?;
         // fwht_shfl_forward_256 reads signs[tid*8..tid*8+7], so 256 floats each.
         let n_signs = 256;
         let s1_vals = Self::gen_fwht_signs(42, n_signs);
@@ -3560,7 +3652,8 @@ impl KvCache {
         let s2 = gpu.alloc_tensor(&[n_signs], DType::F32)?;
         gpu.hip.memcpy_htod(&s1.buf, &s1_bytes)?;
         gpu.hip.memcpy_htod(&s2.buf, &s2_bytes)?;
-        let v_bph = v_bpp / n_kv_heads;
+        let k_bph = layout.k_bytes_per_head;
+        let v_bph = layout.v_bytes_per_head;
         let n_kv = is_kv_layer.iter().filter(|b| **b).count();
         eprintln!(
             "KV cache: fwht3 filtered ({n_kv}/{} layers carry KV; K FWHT-3b {k_bph}B + V Q8 {v_bph}B = {} B/head)",
@@ -3568,7 +3661,7 @@ impl KvCache {
             k_bph + v_bph,
         );
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: false, quant_int8: false, quant_hfq4: false,
             quant_asym4: false, quant_asym3: true, quant_asym2: false, quant_fwht: true,
@@ -3587,22 +3680,15 @@ impl KvCache {
         gpu: &mut Gpu, n_layers: usize, n_kv_heads: usize, head_dim: usize,
         max_seq_len: usize, physical_cap: usize,
     ) -> HipResult<Self> {
-        assert!(head_dim == 256, "asym3 currently requires head_dim=256 (Qwen 3.5)");
-        assert!(head_dim % 32 == 0);
-        assert!(physical_cap > 0 && physical_cap <= max_seq_len,
-            "physical_cap ({physical_cap}) must be in (0, max_seq_len={max_seq_len}]");
-        let kv_dim = n_kv_heads * head_dim;
-        let k_bph = 4 + (head_dim * 3) / 8;
-        let k_elems = (physical_cap * n_kv_heads * k_bph + 3) / 4;
-        let v_blocks_per_head = head_dim / 32;
-        let v_bpp = n_kv_heads * v_blocks_per_head * 34;
-        let v_elems = (physical_cap * v_bpp + 3) / 4;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Asym3, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
 
         let mut k_gpu = Vec::with_capacity(n_layers);
         let mut v_gpu = Vec::with_capacity(n_layers);
         for _ in 0..n_layers {
-            k_gpu.push(gpu.zeros(&[k_elems], DType::F32)?);
-            v_gpu.push(gpu.zeros(&[v_elems], DType::F32)?);
+            k_gpu.push(gpu.zeros(&[layout.k_elems], DType::F32)?);
+            v_gpu.push(gpu.zeros(&[layout.v_elems], DType::F32)?);
         }
         let n_blocks = head_dim / 2;
         let (cos_vals, sin_vals) = Self::gen_givens_angles(42, n_blocks);
@@ -3612,11 +3698,12 @@ impl KvCache {
         let st = gpu.alloc_tensor(&[n_blocks], DType::F32)?;
         gpu.hip.memcpy_htod(&ct.buf, &cb)?;
         gpu.hip.memcpy_htod(&st.buf, &sb)?;
-        let v_bph = v_bpp / n_kv_heads;
+        let k_bph = layout.k_bytes_per_head;
+        let v_bph = layout.v_bytes_per_head;
         eprintln!("KV cache: asym3 (K rotated-3b {k_bph}B + V Q8 {v_bph}B = {} B/head, {:.1}x vs fp32, physical_cap={physical_cap} / max_seq={max_seq_len})",
             k_bph + v_bph, (head_dim * 4 * 2) as f64 / (k_bph + v_bph) as f64);
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: false, quant_int8: false, quant_hfq4: false,
             quant_asym4: false, quant_asym3: true, quant_asym2: false, quant_fwht: false,
@@ -3640,16 +3727,13 @@ impl KvCache {
         gpu: &mut Gpu, is_kv_layer: &[bool], n_kv_heads: usize, head_dim: usize,
         max_seq_len: usize,
     ) -> HipResult<Self> {
-        assert!(head_dim == 128 || head_dim == 256, "asym2 requires head_dim=128 or 256");
-        assert!(head_dim % 32 == 0);
         let physical_cap = max_seq_len;
-        let kv_dim = n_kv_heads * head_dim;
-        let k_bph = 4 + head_dim / 4;
-        let k_elems = (physical_cap * n_kv_heads * k_bph + 3) / 4;
-        let v_blocks_per_head = head_dim / 32;
-        let v_bpp = n_kv_heads * v_blocks_per_head * 34;
-        let v_elems = (physical_cap * v_bpp + 3) / 4;
-        let (k_gpu, v_gpu) = Self::alloc_k_v_filtered(gpu, k_elems, v_elems, is_kv_layer)?;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Asym2, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
+        let (k_gpu, v_gpu) = Self::alloc_k_v_filtered(
+            gpu, layout.k_elems, layout.v_elems, is_kv_layer,
+        )?;
         let n_blocks = head_dim / 2;
         let (cos_vals, sin_vals) = Self::gen_givens_angles(42, n_blocks);
         let cb: Vec<u8> = cos_vals.iter().flat_map(|v| v.to_ne_bytes()).collect();
@@ -3658,7 +3742,8 @@ impl KvCache {
         let st = gpu.alloc_tensor(&[n_blocks], DType::F32)?;
         gpu.hip.memcpy_htod(&ct.buf, &cb)?;
         gpu.hip.memcpy_htod(&st.buf, &sb)?;
-        let v_bph = v_bpp / n_kv_heads;
+        let k_bph = layout.k_bytes_per_head;
+        let v_bph = layout.v_bytes_per_head;
         let n_kv = is_kv_layer.iter().filter(|b| **b).count();
         eprintln!(
             "KV cache: asym2 filtered ({n_kv}/{} layers carry KV; K rotated-2b {k_bph}B + V Q8 {v_bph}B = {} B/head)",
@@ -3666,7 +3751,7 @@ impl KvCache {
             k_bph + v_bph,
         );
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: false, quant_int8: false, quant_hfq4: false,
             quant_asym4: false, quant_asym3: false, quant_asym2: true, quant_fwht: false,
@@ -3682,16 +3767,13 @@ impl KvCache {
         gpu: &mut Gpu, is_kv_layer: &[bool], n_kv_heads: usize, head_dim: usize,
         max_seq_len: usize,
     ) -> HipResult<Self> {
-        assert!(head_dim == 128 || head_dim == 256, "fwht2 requires head_dim=128 or 256");
-        assert!(head_dim % 32 == 0);
         let physical_cap = max_seq_len;
-        let kv_dim = n_kv_heads * head_dim;
-        let k_bph = 4 + head_dim / 4;
-        let k_elems = (physical_cap * n_kv_heads * k_bph + 3) / 4;
-        let v_blocks_per_head = head_dim / 32;
-        let v_bpp = n_kv_heads * v_blocks_per_head * 34;
-        let v_elems = (physical_cap * v_bpp + 3) / 4;
-        let (k_gpu, v_gpu) = Self::alloc_k_v_filtered(gpu, k_elems, v_elems, is_kv_layer)?;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Asym2, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
+        let (k_gpu, v_gpu) = Self::alloc_k_v_filtered(
+            gpu, layout.k_elems, layout.v_elems, is_kv_layer,
+        )?;
         let n_signs = 128;
         let s1_vals = Self::gen_fwht_signs(42, n_signs);
         let s2_vals = Self::gen_fwht_signs(1042, n_signs);
@@ -3701,7 +3783,8 @@ impl KvCache {
         let s2 = gpu.alloc_tensor(&[n_signs], DType::F32)?;
         gpu.hip.memcpy_htod(&s1.buf, &s1_bytes)?;
         gpu.hip.memcpy_htod(&s2.buf, &s2_bytes)?;
-        let v_bph = v_bpp / n_kv_heads;
+        let k_bph = layout.k_bytes_per_head;
+        let v_bph = layout.v_bytes_per_head;
         let n_kv = is_kv_layer.iter().filter(|b| **b).count();
         eprintln!(
             "KV cache: fwht2 filtered ({n_kv}/{} layers carry KV; K FWHT-2b {k_bph}B + V Q8 {v_bph}B = {} B/head)",
@@ -3709,7 +3792,7 @@ impl KvCache {
             k_bph + v_bph,
         );
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: false, quant_int8: false, quant_hfq4: false,
             quant_asym4: false, quant_asym3: false, quant_asym2: true, quant_fwht: true,
@@ -3724,22 +3807,15 @@ impl KvCache {
         gpu: &mut Gpu, n_layers: usize, n_kv_heads: usize, head_dim: usize,
         max_seq_len: usize, physical_cap: usize,
     ) -> HipResult<Self> {
-        assert!(head_dim == 128 || head_dim == 256, "asym2 requires head_dim=128 or 256");
-        assert!(head_dim % 32 == 0);
-        assert!(physical_cap > 0 && physical_cap <= max_seq_len,
-            "physical_cap ({physical_cap}) must be in (0, max_seq_len={max_seq_len}]");
-        let kv_dim = n_kv_heads * head_dim;
-        let k_bph = 4 + head_dim / 4;
-        let k_elems = (physical_cap * n_kv_heads * k_bph + 3) / 4;
-        let v_blocks_per_head = head_dim / 32;
-        let v_bpp = n_kv_heads * v_blocks_per_head * 34;
-        let v_elems = (physical_cap * v_bpp + 3) / 4;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Asym2, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
 
         let mut k_gpu = Vec::with_capacity(n_layers);
         let mut v_gpu = Vec::with_capacity(n_layers);
         for _ in 0..n_layers {
-            k_gpu.push(gpu.zeros(&[k_elems], DType::F32)?);
-            v_gpu.push(gpu.zeros(&[v_elems], DType::F32)?);
+            k_gpu.push(gpu.zeros(&[layout.k_elems], DType::F32)?);
+            v_gpu.push(gpu.zeros(&[layout.v_elems], DType::F32)?);
         }
         let n_blocks = head_dim / 2;
         let (cos_vals, sin_vals) = Self::gen_givens_angles(42, n_blocks);
@@ -3749,11 +3825,12 @@ impl KvCache {
         let st = gpu.alloc_tensor(&[n_blocks], DType::F32)?;
         gpu.hip.memcpy_htod(&ct.buf, &cb)?;
         gpu.hip.memcpy_htod(&st.buf, &sb)?;
-        let v_bph = v_bpp / n_kv_heads;
+        let k_bph = layout.k_bytes_per_head;
+        let v_bph = layout.v_bytes_per_head;
         eprintln!("KV cache: asym2 (K rotated-2b {k_bph}B + V Q8 {v_bph}B = {} B/head, {:.1}x vs fp32)",
             k_bph + v_bph, (head_dim * 4 * 2) as f64 / (k_bph + v_bph) as f64);
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: false, quant_int8: false, quant_hfq4: false,
             quant_asym4: false, quant_asym3: false, quant_asym2: true, quant_fwht: false,
@@ -3888,14 +3965,13 @@ impl KvCache {
         max_seq_len: usize,
         physical_cap: usize,
     ) -> HipResult<Self> {
-        assert!(physical_cap > 0 && physical_cap <= max_seq_len);
-        let kv_dim = n_kv_heads * head_dim;
-        let blocks_per_head = head_dim / 32;
-        let total_blocks = n_kv_heads * blocks_per_head;
-        let cache_bytes = physical_cap * total_blocks * 34;
-        let cache_elems = (cache_bytes + 3) / 4;
-        let (k_gpu, v_gpu) = alloc_kv_per_layer_multi(gpus, n_layers, cache_elems, cache_elems)?;
-        Ok(Self { k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim, max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim, quantized: true, quant_q8: true, quant_int8: false, quant_hfq4: false, quant_asym4: false, quant_asym3: false, quant_asym2: false, quant_fwht: false, boundary_layers: 0, givens_cos: None, givens_sin: None, layer_is_boundary: vec![], compact_offset: 0 })
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Q8, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
+        let (k_gpu, v_gpu) = alloc_kv_per_layer_multi(
+            gpus, n_layers, layout.k_elems, layout.v_elems,
+        )?;
+        Ok(Self { k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim, max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim, quantized: true, quant_q8: true, quant_int8: false, quant_hfq4: false, quant_asym4: false, quant_asym3: false, quant_asym2: false, quant_fwht: false, boundary_layers: 0, givens_cos: None, givens_sin: None, layer_is_boundary: vec![], compact_offset: 0 })
     }
 
     pub fn new_gpu_int8c_multi(
@@ -3978,19 +4054,15 @@ impl KvCache {
         max_seq_len: usize,
         physical_cap: usize,
     ) -> HipResult<Self> {
-        assert!(head_dim == 128 || head_dim == 256, "asym4 requires head_dim=128 or 256");
-        assert!(head_dim % 32 == 0);
-        assert!(physical_cap > 0 && physical_cap <= max_seq_len);
-        let kv_dim = n_kv_heads * head_dim;
-        let k_bph = 4 + head_dim / 2;
-        let k_elems = (physical_cap * n_kv_heads * k_bph + 3) / 4;
-        let v_blocks_per_head = head_dim / 32;
-        let v_bpp = n_kv_heads * v_blocks_per_head * 34;
-        let v_elems = (physical_cap * v_bpp + 3) / 4;
-        let (k_gpu, v_gpu) = alloc_kv_per_layer_multi(gpus, n_layers, k_elems, v_elems)?;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Asym4, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
+        let (k_gpu, v_gpu) = alloc_kv_per_layer_multi(
+            gpus, n_layers, layout.k_elems, layout.v_elems,
+        )?;
         replicate_givens_to_all_devices(gpus, head_dim / 2, 42)?;
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: false, quant_int8: false, quant_hfq4: false,
             quant_asym4: true, quant_asym3: false, quant_asym2: false, quant_fwht: false,
@@ -4017,19 +4089,15 @@ impl KvCache {
         max_seq_len: usize,
         physical_cap: usize,
     ) -> HipResult<Self> {
-        assert!(head_dim == 256, "asym3 currently requires head_dim=256 (Qwen 3.5)");
-        assert!(head_dim % 32 == 0);
-        assert!(physical_cap > 0 && physical_cap <= max_seq_len);
-        let kv_dim = n_kv_heads * head_dim;
-        let k_bph = 4 + (head_dim * 3) / 8;
-        let k_elems = (physical_cap * n_kv_heads * k_bph + 3) / 4;
-        let v_blocks_per_head = head_dim / 32;
-        let v_bpp = n_kv_heads * v_blocks_per_head * 34;
-        let v_elems = (physical_cap * v_bpp + 3) / 4;
-        let (k_gpu, v_gpu) = alloc_kv_per_layer_multi(gpus, n_layers, k_elems, v_elems)?;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Asym3, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
+        let (k_gpu, v_gpu) = alloc_kv_per_layer_multi(
+            gpus, n_layers, layout.k_elems, layout.v_elems,
+        )?;
         replicate_givens_to_all_devices(gpus, head_dim / 2, 42)?;
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: false, quant_int8: false, quant_hfq4: false,
             quant_asym4: false, quant_asym3: true, quant_asym2: false, quant_fwht: false,
@@ -4056,19 +4124,15 @@ impl KvCache {
         max_seq_len: usize,
         physical_cap: usize,
     ) -> HipResult<Self> {
-        assert!(head_dim == 128 || head_dim == 256, "asym2 requires head_dim=128 or 256");
-        assert!(head_dim % 32 == 0);
-        assert!(physical_cap > 0 && physical_cap <= max_seq_len);
-        let kv_dim = n_kv_heads * head_dim;
-        let k_bph = 4 + head_dim / 4;
-        let k_elems = (physical_cap * n_kv_heads * k_bph + 3) / 4;
-        let v_blocks_per_head = head_dim / 32;
-        let v_bpp = n_kv_heads * v_blocks_per_head * 34;
-        let v_elems = (physical_cap * v_bpp + 3) / 4;
-        let (k_gpu, v_gpu) = alloc_kv_per_layer_multi(gpus, n_layers, k_elems, v_elems)?;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Asym2, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
+        let (k_gpu, v_gpu) = alloc_kv_per_layer_multi(
+            gpus, n_layers, layout.k_elems, layout.v_elems,
+        )?;
         replicate_givens_to_all_devices(gpus, head_dim / 2, 42)?;
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: false, quant_int8: false, quant_hfq4: false,
             quant_asym4: false, quant_asym3: false, quant_asym2: true, quant_fwht: false,
@@ -4103,19 +4167,15 @@ impl KvCache {
         max_seq_len: usize,
         physical_cap: usize,
     ) -> HipResult<Self> {
-        assert!(head_dim == 128 || head_dim == 256, "fwht4 requires head_dim=128 or 256");
-        assert!(head_dim % 32 == 0);
-        assert!(physical_cap > 0 && physical_cap <= max_seq_len);
-        let kv_dim = n_kv_heads * head_dim;
-        let k_bph = 4 + head_dim / 2;
-        let k_elems = (physical_cap * n_kv_heads * k_bph + 3) / 4;
-        let v_blocks_per_head = head_dim / 32;
-        let v_bpp = n_kv_heads * v_blocks_per_head * 34;
-        let v_elems = (physical_cap * v_bpp + 3) / 4;
-        let (k_gpu, v_gpu) = alloc_kv_per_layer_multi(gpus, n_layers, k_elems, v_elems)?;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Asym4, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
+        let (k_gpu, v_gpu) = alloc_kv_per_layer_multi(
+            gpus, n_layers, layout.k_elems, layout.v_elems,
+        )?;
         replicate_fwht_signs_to_all_devices(gpus, 128)?;
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: false, quant_int8: false, quant_hfq4: false,
             quant_asym4: true, quant_asym3: false, quant_asym2: false, quant_fwht: true,
@@ -4142,20 +4202,16 @@ impl KvCache {
         max_seq_len: usize,
         physical_cap: usize,
     ) -> HipResult<Self> {
-        assert!(head_dim == 256, "fwht3 currently requires head_dim=256 (Qwen 3.5)");
-        assert!(head_dim % 32 == 0);
-        assert!(physical_cap > 0 && physical_cap <= max_seq_len);
-        let kv_dim = n_kv_heads * head_dim;
-        let k_bph = 4 + (head_dim * 3) / 8;
-        let k_elems = (physical_cap * n_kv_heads * k_bph + 3) / 4;
-        let v_blocks_per_head = head_dim / 32;
-        let v_bpp = n_kv_heads * v_blocks_per_head * 34;
-        let v_elems = (physical_cap * v_bpp + 3) / 4;
-        let (k_gpu, v_gpu) = alloc_kv_per_layer_multi(gpus, n_layers, k_elems, v_elems)?;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Asym3, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
+        let (k_gpu, v_gpu) = alloc_kv_per_layer_multi(
+            gpus, n_layers, layout.k_elems, layout.v_elems,
+        )?;
         // fwht_shfl_forward_256 needs 256-element signs1/signs2.
         replicate_fwht_signs_to_all_devices(gpus, 256)?;
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: false, quant_int8: false, quant_hfq4: false,
             quant_asym4: false, quant_asym3: true, quant_asym2: false, quant_fwht: true,
@@ -4182,19 +4238,15 @@ impl KvCache {
         max_seq_len: usize,
         physical_cap: usize,
     ) -> HipResult<Self> {
-        assert!(head_dim == 128 || head_dim == 256, "fwht2 requires head_dim=128 or 256");
-        assert!(head_dim % 32 == 0);
-        assert!(physical_cap > 0 && physical_cap <= max_seq_len);
-        let kv_dim = n_kv_heads * head_dim;
-        let k_bph = 4 + head_dim / 4;
-        let k_elems = (physical_cap * n_kv_heads * k_bph + 3) / 4;
-        let v_blocks_per_head = head_dim / 32;
-        let v_bpp = n_kv_heads * v_blocks_per_head * 34;
-        let v_elems = (physical_cap * v_bpp + 3) / 4;
-        let (k_gpu, v_gpu) = alloc_kv_per_layer_multi(gpus, n_layers, k_elems, v_elems)?;
+        let layout = PackedKvLayout::new(
+            PackedKvKind::Asym2, n_kv_heads, head_dim, max_seq_len, physical_cap,
+        )?;
+        let (k_gpu, v_gpu) = alloc_kv_per_layer_multi(
+            gpus, n_layers, layout.k_elems, layout.v_elems,
+        )?;
         replicate_fwht_signs_to_all_devices(gpus, 128)?;
         Ok(Self {
-            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim,
+            k_gpu, v_gpu, k_scales: vec![], v_scales: vec![], kv_dim: layout.kv_dim,
             max_seq: max_seq_len, physical_cap, n_kv_heads, head_dim,
             quantized: true, quant_q8: false, quant_int8: false, quant_hfq4: false,
             quant_asym4: false, quant_asym3: false, quant_asym2: true, quant_fwht: true,
@@ -4769,6 +4821,60 @@ fn simple_rand() -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packed_kv_q8_layout_matches_kernel_stride() {
+        let layout = PackedKvLayout::new(PackedKvKind::Q8, 8, 128, 8192, 4096).unwrap();
+        assert_eq!(layout.kv_dim, 1024);
+        assert_eq!(layout.k_bytes_per_head, 136);
+        assert_eq!(layout.v_bytes_per_head, 136);
+        assert_eq!(layout.k_elems, 1_114_112);
+        assert_eq!(layout.v_elems, 1_114_112);
+
+        let rounded = PackedKvLayout::new(PackedKvKind::Q8, 1, 32, 1, 1).unwrap();
+        assert_eq!(rounded.k_elems, 9, "34 raw bytes require nine F32 elements");
+    }
+
+    #[test]
+    fn packed_kv_asym_layouts_share_q8_value_stride() {
+        let asym2 = PackedKvLayout::new(PackedKvKind::Asym2, 2, 256, 8, 3).unwrap();
+        let asym3 = PackedKvLayout::new(PackedKvKind::Asym3, 2, 256, 8, 3).unwrap();
+        let asym4 = PackedKvLayout::new(PackedKvKind::Asym4, 2, 256, 8, 3).unwrap();
+
+        assert_eq!((asym2.k_bytes_per_head, asym2.k_elems), (68, 102));
+        assert_eq!((asym3.k_bytes_per_head, asym3.k_elems), (100, 150));
+        assert_eq!((asym4.k_bytes_per_head, asym4.k_elems), (132, 198));
+        for layout in [asym2, asym3, asym4] {
+            assert_eq!(layout.v_bytes_per_head, 272);
+            assert_eq!(layout.v_elems, 408);
+        }
+    }
+
+    #[test]
+    fn packed_kv_physical_cap_controls_allocation_not_logical_context() {
+        let capped = PackedKvLayout::new(PackedKvKind::Asym3, 4, 256, 65_536, 2048).unwrap();
+        let full = PackedKvLayout::new(PackedKvKind::Asym3, 4, 256, 65_536, 65_536).unwrap();
+        assert_eq!(full.k_elems, capped.k_elems * 32);
+        assert_eq!(full.v_elems, capped.v_elems * 32);
+    }
+
+    #[test]
+    fn packed_kv_layout_rejects_invalid_dimensions_and_capacity() {
+        assert!(PackedKvLayout::new(PackedKvKind::Q8, 0, 128, 32, 32).is_err());
+        assert!(PackedKvLayout::new(PackedKvKind::Q8, 1, 128, 32, 0).is_err());
+        assert!(PackedKvLayout::new(PackedKvKind::Q8, 1, 128, 32, 33).is_err());
+        assert!(PackedKvLayout::new(PackedKvKind::Q8, 1, 0, 32, 32).is_err());
+        assert!(PackedKvLayout::new(PackedKvKind::Q8, 1, 48, 32, 32).is_err());
+        assert!(PackedKvLayout::new(PackedKvKind::Asym3, 1, 128, 32, 32).is_err());
+        assert!(PackedKvLayout::new(PackedKvKind::Asym4, 1, 64, 32, 32).is_err());
+    }
+
+    #[test]
+    fn packed_kv_layout_reports_host_size_overflow() {
+        let err = PackedKvLayout::new(PackedKvKind::Q8, usize::MAX, 32, 1, 1)
+            .unwrap_err();
+        assert!(err.message.contains("overflows host address space"));
+    }
 
     #[test]
     fn attractor_block_below_threshold() {
