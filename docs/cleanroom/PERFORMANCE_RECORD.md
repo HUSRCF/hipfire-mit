@@ -518,3 +518,69 @@ target check.
 - Decision: accept checked repeated-eviction position continuity as the third
   M3 deliverable. Quantization numerical-fidelity and the remaining format
   milestones stay open.
+
+---
+
+## M3: HFQ quant-payload layout validation — 2026-08-10
+
+### Run identity
+
+- Regression parent: `29cf4363b5cf3bd5cf8b334358067302d56110de`.
+- Candidate commit: `ab1163dcd08ada578e2a9f38aaf71a90396c7b7e`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Candidate benchmark md5: `5bc7854e8530d4c1c75f0ba1aab2aa98`.
+- Candidate daemon md5: `8b3cd494a24a7378ddaf38be58c88ae6`.
+- Candidate DFlash md5: `fe1ee567a4b1ab04363090f8bb15696d`.
+- Environment: `ROCR_VISIBLE_DEVICES=0`, `HIP_VISIBLE_DEVICES=0`,
+  `HIPFIRE_MODELS_DIR=/home/husrcf/.hipfire/models`,
+  `HIPFIRE_BASELINE_ARCH=gfx1100-w7900`, and ROCm 7.14 runtime directories
+  prepended to `LD_LIBRARY_PATH`. Every GPU command was serialized by
+  `scripts/gpu-lock.sh`.
+- Correctness commands: `cargo test -p hipfire-runtime --lib`,
+  `cargo check -p hipfire-runtime --examples --features deltanet`,
+  `./scripts/cleanroom-gate.sh`, `./scripts/coherence-gate.sh`, and
+  `./scripts/coherence-gate-dflash.sh`.
+- Compatibility check: the release `query_tensor` example parsed the indices
+  of 20 complete local model files. Incomplete, temporary, lock, and known-bad
+  files were excluded explicitly.
+- Performance command: three fresh invocations of
+  `./scripts/speed-gate.sh --fast`. Each observation is the gate's best of two
+  executions using deterministic synthetic token IDs `0..31`.
+
+### Measurements
+
+| Metric | Committed floor | Candidate observation 1 | Candidate observation 2 | Candidate observation 3 | Candidate median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1290.6 | 1324.6 | 1271.7 | 1290.6 |
+| 4B MQ4 decode tok/s | 140.9 | 140.9 | 139.9 | 140.0 | 140.0 |
+
+The commit-hook repetition also passed at 1294.1 prefill tok/s and 141.6
+decode tok/s.
+
+### Decision
+
+- Candidate median delta: +5.16% prefill and -0.64% decode. Every observation
+  passes the committed 5% regression tolerance. Layout validation executes
+  once while parsing the model index, outside the benchmark timer, so no
+  implementation-caused speedup is claimed.
+- Correctness: all 183 `hipfire-runtime` library tests pass. The layout table
+  test covers every active quantization identifier; rejection cases cover
+  wrong groups, short dense payloads, invalid Q8HFQ and FP4 shapes, and a
+  reserved identifier. Runtime examples with DeltaNet and the clean-room
+  source/license gate pass.
+- Compatibility: 20 complete local HFQ indices pass across Qwen 3/3.5/3.6,
+  Laguna, MQ3, MQ4, MQ4P, MQ4R, HF4, MTP, and DFlash files. The parser checks
+  metadata and declared ranges only and does not scan tensor payload bytes.
+- Standard GPU0 coherence: four available cells complete without hard
+  errors; all outputs were manually checked for relevance, structure, and
+  repetition. Report: `/tmp/coherence-hfq-layout.md`. The commit-hook rerun
+  also passed: `/tmp/coherence-20260810-013928.md`.
+- DFlash/DDTree GPU0 coherence: all four cells report `ok=true` and
+  `soft_warn=false`; prose and code outputs were manually reviewed. Report:
+  `/tmp/coherence-dflash-hfq-layout.md`.
+- Agentic commit-hook quality: one Qwen 3.6 27B cell passes with valid tool
+  JSON and zero warnings. Report: `/tmp/agentic-gate-20260810-013945.md`.
+- Decision: accept exact registered quant-payload layout validation as the
+  fourth M3 deliverable. Numerical quantization fidelity and the remaining
+  format milestones stay open.

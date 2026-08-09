@@ -16,7 +16,7 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M0: governance and reproducibility | 1-2 | complete | MIT/source gate, clean-room PR declaration, build and performance baselines |
 | M1: speculative decode foundation | 3-8 | complete | shared greedy acceptance contract, semantic statistics, deterministic tests, and GPU0 correctness/throughput acceptance |
 | M2: release and device execution | 10-18 | in progress | reproducible delivery and the device-execution foundation are complete; remaining quantization, maintenance, and integration directions are still open |
-| M3: quantization and context paths | 19-39 | in progress | strict HFQ boundaries, shared packed-KV allocation, and checked long-context position continuity are complete; quantization numerical fidelity remains open |
+| M3: quantization and context paths | 19-39 | in progress | strict HFQ boundaries and quant-payload layouts, shared packed-KV allocation, and checked long-context position continuity are complete; quantization numerical fidelity remains open |
 
 ## M0 evidence
 
@@ -177,6 +177,33 @@ prefill reading is not attributed to the parser because inference timing
 starts after the one-time file parse; it is recorded only as non-regression.
 Detailed reports and measurements are in
 `docs/cleanroom/PERFORMANCE_RECORD.md`.
+
+### HFQ quant-payload layout contract
+
+Commit `ab1163dcd08ada578e2a9f38aaf71a90396c7b7e` extends the checked HFQ
+index boundary from generic byte ranges to the registered quantization
+layouts. Before any tensor range can reach a GPU loader, the parser now
+requires its quantization type, group size, shape, and exact declared byte
+length to agree. Dense F16/F32/BF16 tensors, every registered block format,
+the row-aligned Q8HFQ layout, and the HFP4/MFP4 row layouts use checked host
+arithmetic; reserved or unknown type identifiers fail closed.
+
+Two new tests cover every active quantization identifier and representative
+metadata, shape, group-size, and payload-length failures. Together with the
+updated valid fixture, all 183 runtime library tests pass. A CPU-only scan of
+20 complete local HFQ files spanning Qwen 3, Qwen 3.5, Qwen 3.6, Laguna,
+MQ3/MQ4/MQ4P/MQ4R/HF4, MTP, and DFlash variants also passes, without reading
+or scanning tensor payload contents.
+
+GPU0 validation passes the four available standard coherence cells and all
+four DFlash/DDTree cells after manual output review; every speculative
+detector reports `ok=true` and `soft_warn=false`. The commit-hook Qwen 3.6
+27B agentic cell also passes with zero warnings. Three fresh speed-gate runs
+have median 1290.6 prefill tok/s and 140.0 decode tok/s, respectively +5.16%
+and -0.64% versus the committed W7900 floor. This is recorded as
+non-regression because the new work occurs once during model-index parsing,
+outside the measured inference hot path. Detailed identities and reports are
+in `docs/cleanroom/PERFORMANCE_RECORD.md`.
 
 ### Packed KV allocation contract
 
