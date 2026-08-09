@@ -584,3 +584,63 @@ decode tok/s.
 - Decision: accept exact registered quant-payload layout validation as the
   fourth M3 deliverable. Numerical quantization fidelity and the remaining
   format milestones stay open.
+
+---
+
+## M3: quantization numerical parity gate — 2026-08-10
+
+### Run identity
+
+- Regression parent: `acf2d0a9310c693d0f2eef72390e86ce885aa511`.
+- Candidate commit: `dce4648a97490426b13ed267a81b27ef327c5811`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Candidate benchmark md5: `5bc7854e8530d4c1c75f0ba1aab2aa98`.
+- Candidate daemon md5: `8b3cd494a24a7378ddaf38be58c88ae6`.
+- Candidate DFlash md5: `fe1ee567a4b1ab04363090f8bb15696d`.
+- Environment: `ROCR_VISIBLE_DEVICES=0`, `HIP_VISIBLE_DEVICES=0`,
+  `HIPFIRE_MODELS_DIR=/home/husrcf/.hipfire/models`,
+  `HIPFIRE_BASELINE_ARCH=gfx1100-w7900`, and ROCm 7.14 runtime directories
+  prepended to `LD_LIBRARY_PATH`. Every GPU command was serialized by
+  `scripts/gpu-lock.sh`.
+- Correctness commands: `bash -n scripts/quant-parity-gate.sh
+  .githooks/pre-commit`, `./scripts/cleanroom-gate.sh`, and
+  `./scripts/quant-parity-gate.sh`. The updated pre-commit hook then repeated
+  the parity gate, standard coherence, agentic, and speed gates.
+- Performance command: three fresh invocations of
+  `./scripts/speed-gate.sh --fast`. Each observation is the gate's best of two
+  executions using deterministic synthetic token IDs `0..31`.
+
+### Measurements
+
+| Metric | Committed floor | Candidate observation 1 | Candidate observation 2 | Candidate observation 3 | Candidate median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1306.5 | 1302.9 | 1289.9 | 1302.9 |
+| 4B MQ4 decode tok/s | 140.9 | 141.1 | 140.4 | 140.2 | 140.4 |
+
+The commit-hook repetition also passed at 1307.6 prefill tok/s and 141.3
+decode tok/s.
+
+### Decision
+
+- Candidate median delta: +6.16% prefill and -0.35% decode. All observations
+  pass the committed 5% regression tolerance. The change only adds a test
+  script and hook mapping, and the measured inference executable hash is
+  unchanged, so no implementation-caused speedup is claimed.
+- Numerical parity: all five GPU0 cases pass. HFQ4 reports
+  `gpu_cpu_err=0.000366` and `mmq_err=0.040617`; HFQ6 reports maximum error
+  `0.000061`. MQ3-Lloyd, HFP4, and MFP4 exercise quad-clean and tail-group
+  shapes through K=2048 and remain below their case-specific tolerances.
+  Report: `/tmp/quant-parity-cleanroom.md`; commit-hook repetition:
+  `/tmp/quant-parity-20260810-014647.md`.
+- Standard GPU0 coherence: all four available cells pass and were manually
+  checked for relevance, valid tool JSON, and repetition. Report:
+  `/tmp/coherence-20260810-014648.md`.
+- Agentic commit-hook quality: one Qwen 3.6 27B cell passes with valid
+  `name='read'` JSON and zero warnings. Report:
+  `/tmp/agentic-gate-20260810-014704.md`.
+- DFlash/DDTree inference code and binary are unchanged from the immediately
+  preceding full 4/4 pass recorded under HFQ payload-layout validation.
+- Decision: accept a mandatory independent numerical oracle as the fifth M3
+  deliverable. Broader format coverage and model-level quantization quality
+  remain open.

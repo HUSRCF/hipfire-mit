@@ -16,7 +16,7 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M0: governance and reproducibility | 1-2 | complete | MIT/source gate, clean-room PR declaration, build and performance baselines |
 | M1: speculative decode foundation | 3-8 | complete | shared greedy acceptance contract, semantic statistics, deterministic tests, and GPU0 correctness/throughput acceptance |
 | M2: release and device execution | 10-18 | in progress | reproducible delivery and the device-execution foundation are complete; remaining quantization, maintenance, and integration directions are still open |
-| M3: quantization and context paths | 19-39 | in progress | strict HFQ boundaries and quant-payload layouts, shared packed-KV allocation, and checked long-context position continuity are complete; quantization numerical fidelity remains open |
+| M3: quantization and context paths | 19-39 | in progress | strict HFQ boundaries and quant-payload layouts, GPU/CPU quant parity gating, shared packed-KV allocation, and checked long-context position continuity are complete; full format fidelity remains open |
 
 ## M0 evidence
 
@@ -204,6 +204,29 @@ and -0.64% versus the committed W7900 floor. This is recorded as
 non-regression because the new work occurs once during model-index parsing,
 outside the measured inference hot path. Detailed identities and reports are
 in `docs/cleanroom/PERFORMANCE_RECORD.md`.
+
+### Quantization numerical parity gate
+
+Commit `dce4648a97490426b13ed267a81b27ef327c5811` turns five existing
+synthetic CPU-reference/GPU comparisons into one mandatory, report-producing
+gate. It covers HFQ4-G256 GEMV, embedding, and MMQ residual output; HFQ6-G256
+GEMV; MQ3-G256-Lloyd tail groups; HFP4-G32 tail groups; and rotated MFP4-G32
+tail groups. Every case owns a numerical tolerance and a non-zero failure
+exit, the script builds current release targets before execution, and all GPU
+work is serialized through `scripts/gpu-lock.sh`.
+
+The pre-commit hook now runs this battery when staged paths indicate
+quantization, dequantization, HFQ/MQ, HFP4, or MFP4 work. On GPU0 all five
+cases pass; the report records HFQ4 GEMV error `0.000366`, HFQ4 MMQ residual
+error `0.040617`, HFQ6 error `0.000061`, and passing quad/tail sweeps for the
+remaining formats. Standard coherence and the 27B agentic cell also pass
+after manual review.
+
+Three fresh performance observations have median 1302.9 prefill tok/s and
+140.4 decode tok/s, respectively +6.16% and -0.35% versus the committed W7900
+floor. This testing-only change does not alter inference binaries, so the
+measurements establish non-regression only. Full report identities are in
+`docs/cleanroom/PERFORMANCE_RECORD.md`.
 
 ### Packed KV allocation contract
 
