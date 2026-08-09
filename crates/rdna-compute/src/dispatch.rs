@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! High-level GPU dispatch interface.
 //! Manages compiled kernels, provides typed tensor operations.
 
@@ -8,6 +9,66 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::OnceLock;
+
+fn normalize_target_arch(raw: &str, allow_generic: bool) -> Option<String> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    let token = normalized
+        .split(|c: char| c == ':' || c.is_ascii_whitespace())
+        .next()?;
+    let suffix = token.strip_prefix("gfx")?;
+
+    let is_specific = suffix.len() >= 3 && suffix.bytes().all(|b| b.is_ascii_digit());
+    let is_generic = allow_generic
+        && suffix.strip_suffix("-generic").is_some_and(|family| {
+            !family.is_empty()
+                && family.bytes().any(|b| b.is_ascii_digit())
+                && family.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+                && !family.starts_with('-')
+                && !family.ends_with('-')
+                && !family.contains("--")
+        });
+
+    (is_specific || is_generic).then(|| token.to_string())
+}
+
+/// Resolve the kernel compilation target without silently guessing an ISA.
+///
+/// A non-empty explicit override takes precedence and may use an LLVM generic
+/// family target such as `gfx10-1-generic`. Hardware detection must resolve to
+/// a concrete numeric `gfx` target. Unknown or malformed values fail closed so
+/// callers never compile a different architecture's kernels by accident.
+pub fn resolve_target_arch(
+    detected_arch: Option<&str>,
+    override_arch: Option<&str>,
+) -> Result<String, String> {
+    if let Some(explicit) = override_arch.filter(|value| !value.trim().is_empty()) {
+        return normalize_target_arch(explicit, true).ok_or_else(|| {
+            format!(
+                "invalid HIPFIRE_TARGET_ARCH='{explicit}'; expected a concrete gfx target or an LLVM gfx*-generic family"
+            )
+        });
+    }
+
+    detected_arch
+        .and_then(|arch| normalize_target_arch(arch, false))
+        .ok_or_else(|| {
+            "unable to determine a concrete GPU architecture; set HIPFIRE_TARGET_ARCH explicitly"
+                .to_string()
+        })
+}
+
+/// Minimum HIP runtime version used for an architecture-family warning.
+pub fn minimum_hip_version(arch: &str) -> (i32, i32) {
+    if arch.starts_with("gfx115") {
+        (7, 2)
+    } else if arch.starts_with("gfx12") {
+        (6, 4)
+    } else if arch.starts_with("gfx11") {
+        (5, 5)
+    } else {
+        (5, 0)
+    }
+}
 
 /// Per-group byte size of the MQ3-Lloyd quantization layout.
 ///
@@ -773,26 +834,32 @@ impl Gpu {
         // compilation. Used to test cross-arch family targets like
         // `gfx10-1-generic` (covers Navi 10/12/14) without per-arch JIT
         // cache fragmentation. Empty / unset preserves prior behavior.
-        let detected_arch = hip.get_arch(id).unwrap_or_else(|_| "gfx1010".to_string());
-        let arch = std::env::var("HIPFIRE_TARGET_ARCH")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(detected_arch);
+        let detected_arch = hip.get_arch(id).ok();
+        let override_arch = std::env::var("HIPFIRE_TARGET_ARCH").ok();
+        let arch = resolve_target_arch(detected_arch.as_deref(), override_arch.as_deref())
+            .map_err(|message| hip_bridge::HipError::new(0, &message))?;
         let (_, vram_total) = hip.get_vram_info().unwrap_or((0, 0));
 
         // Check HIP runtime version matches GPU arch requirements
         let (hip_major, hip_minor) = hip.runtime_version().unwrap_or((0, 0));
-        let (min_major, min_minor) = match arch.as_str() {
-            "gfx1200" | "gfx1201" => (6, 4), // RDNA4 needs ROCm 6.4+
-            "gfx1150" | "gfx1151" | "gfx1152" => (7, 2), // RDNA3.5 (Strix) needs ROCm 7.2+
-            "gfx1100" | "gfx1101" | "gfx1102" => (5, 5), // RDNA3 needs ROCm 5.5+
-            _ => (5, 0),
-        };
-        if hip_major > 0 && (hip_major < min_major || (hip_major == min_major && hip_minor < min_minor)) {
-            eprintln!("WARNING: HIP runtime {}.{} may not support {}. Minimum: {}.{}", hip_major, hip_minor, arch, min_major, min_minor);
+        let (min_major, min_minor) = minimum_hip_version(&arch);
+        if hip_major > 0
+            && (hip_major < min_major || (hip_major == min_major && hip_minor < min_minor))
+        {
+            eprintln!(
+                "WARNING: HIP runtime {}.{} may not support {}. Minimum: {}.{}",
+                hip_major, hip_minor, arch, min_major, min_minor
+            );
             eprintln!("  Update your HIP runtime or kernels may fail to load.");
         }
-        eprintln!("GPU dev {}: {} ({:.1} GB VRAM, HIP {}.{})", id, arch, vram_total as f64 / 1e9, hip_major, hip_minor);
+        eprintln!(
+            "GPU dev {}: {} ({:.1} GB VRAM, HIP {}.{})",
+            id,
+            arch,
+            vram_total as f64 / 1e9,
+            hip_major,
+            hip_minor
+        );
 
         let compiler = KernelCompiler::new(&arch)?;
 
@@ -2475,6 +2542,7 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         // mb4 path selector — same gate as MQ4-Lloyd's mb4 family.
         let arch_supports_mb4 = matches!(self.arch.as_str(),
             "gfx1100" | "gfx1101" | "gfx1102" | "gfx1150" | "gfx1151");
@@ -2486,7 +2554,6 @@ impl Gpu {
         if use_mb4 {
             return self.gemm_mq3g256_lloyd_residual_wmma_mb4(a_raw, x, y, m, k, batch_size);
         }
-        self.bind_thread()?;
         let (src, module) = kernels::gemm_mq3g256_lloyd_residual_wmma_for_arch(&self.arch);
         self.ensure_kernel(module, src, "gemm_mq3g256_lloyd_residual_wmma")?;
         let x_f16_ptr = self.ensure_fp16_x(x, batch_size * k)?;
@@ -2601,6 +2668,7 @@ impl Gpu {
         qkv_m: usize, z_m: usize, beta_m: usize, alpha_m: usize,
         k: usize, n: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         let total_m = qkv_m + z_m + beta_m + alpha_m;
         let arch_supports_mb4 = matches!(self.arch.as_str(),
             "gfx1100" | "gfx1101" | "gfx1102" | "gfx1150" | "gfx1151");
@@ -2616,7 +2684,6 @@ impl Gpu {
                 qkv_m, z_m, beta_m, alpha_m, k, n,
             );
         }
-        self.bind_thread()?;
         let (src, module) = kernels::gemm_qkvza_mq3g256_lloyd_wmma_for_arch(&self.arch);
         self.ensure_kernel(module, src, "gemm_qkvza_mq3g256_lloyd_wmma")?;
         let x_f16_ptr = self.ensure_fp16_x(x, n * k)?;
@@ -2768,6 +2835,7 @@ impl Gpu {
         q_m: usize, k_m: usize, v_m: usize,
         k: usize, n: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         let total_m = q_m + k_m + v_m;
         let arch_supports_mb4 = matches!(self.arch.as_str(),
             "gfx1100" | "gfx1101" | "gfx1102" | "gfx1150" | "gfx1151");
@@ -2782,7 +2850,6 @@ impl Gpu {
                 q_m, k_m, v_m, k, n,
             );
         }
-        self.bind_thread()?;
         let (src, module) = kernels::gemm_qkv_mq3g256_lloyd_wmma_for_arch(&self.arch);
         self.ensure_kernel(module, src, "gemm_qkv_mq3g256_lloyd_wmma")?;
         let x_f16_ptr = self.ensure_fp16_x(x, n * k)?;
@@ -2922,6 +2989,7 @@ impl Gpu {
         gate_m: usize, up_m: usize,
         k: usize, n: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         let total_m = gate_m + up_m;
         let arch_supports_mb4 = matches!(self.arch.as_str(),
             "gfx1100" | "gfx1101" | "gfx1102" | "gfx1150" | "gfx1151");
@@ -2935,7 +3003,6 @@ impl Gpu {
                 a_gate, a_up, x, y_gate, y_up, gate_m, up_m, k, n,
             );
         }
-        self.bind_thread()?;
         let (src, module) = kernels::gemm_gate_up_mq3g256_lloyd_wmma_for_arch(&self.arch);
         self.ensure_kernel(module, src, "gemm_gate_up_mq3g256_lloyd_wmma")?;
         let x_f16_ptr = self.ensure_fp16_x(x, n * k)?;
@@ -3295,8 +3362,8 @@ impl Gpu {
         m: usize,
         k: usize,
     ) -> HipResult<()> {
-        assert!(k % 256 == 0, "gemv_hfp4g32 requires K%256==0 in v1, got K={}", k);
         self.bind_thread()?;
+        assert!(k % 256 == 0, "gemv_hfp4g32 requires K%256==0 in v1, got K={}", k);
         // Shape-gated: FP8 dot4 only when M is large enough that it
         // actually wins (FFN shapes). At M < 4096 the fallback wins or
         // ties; uniform-FP8 was net-negative in 9B Qwen 3.5 decode.
@@ -3360,8 +3427,8 @@ impl Gpu {
         m: usize,
         k: usize,
     ) -> HipResult<()> {
-        assert!(k % 256 == 0, "gemv_hfp4g32_fp8 requires K%256==0, got K={}", k);
         self.bind_thread()?;
+        assert!(k % 256 == 0, "gemv_hfp4g32_fp8 requires K%256==0, got K={}", k);
         self.ensure_kernel(
             "gemv_hfp4g32_fp8_gfx12",
             kernels::GEMV_HFP4G32_FP8_GFX12_SRC,
@@ -4225,8 +4292,8 @@ impl Gpu {
         m: usize,
         k: usize,
     ) -> HipResult<()> {
-        assert!(k % 256 == 0, "gemv_hfp4g32_dot2 requires K%256==0, got K={}", k);
         self.bind_thread()?;
+        assert!(k % 256 == 0, "gemv_hfp4g32_dot2 requires K%256==0, got K={}", k);
         self.ensure_kernel(
             "gemv_hfp4g32_dot2_gfx11",
             kernels::GEMV_HFP4G32_DOT2_GFX11_SRC,
@@ -4785,6 +4852,7 @@ impl Gpu {
         q_m: usize, k_m: usize, v_m: usize,
         k: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         let xq_ptr = self.ensure_q8_1_mmq_x(x, 1, k)?;
 
         self.ensure_kernel(
@@ -4843,6 +4911,7 @@ impl Gpu {
         qkv_m: usize, z_m: usize, beta_m: usize, alpha_m: usize,
         k: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         let xq_ptr = self.ensure_q8_1_mmq_x(x, 1, k)?;
 
         self.ensure_kernel(
@@ -4909,6 +4978,7 @@ impl Gpu {
         gate_m: usize, up_m: usize,
         k: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         let xq_ptr = self.ensure_q8_1_mmq_x(x, 1, k)?;
 
         self.ensure_kernel(
@@ -6709,6 +6779,7 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         // HFQ3 mb4 path selector. Only triggers on gfx11; gfx12 keeps its
         // existing fast path (line below) since mb4 sibling not ported.
         let total_m = qkv_m + z_m + beta_m + alpha_m;
@@ -6725,7 +6796,6 @@ impl Gpu {
                 y_qkv, y_z, y_beta, y_alpha,
                 qkv_m, z_m, beta_m, alpha_m, k, batch_size);
         }
-        self.bind_thread()?;
         if has_wmma_f16_gfx12(&self.arch) {
             return self.gemm_qkvza_hfq3g256_wmma_gfx12(
                 a_qkv, a_z, a_beta, a_alpha, x,
@@ -7165,6 +7235,7 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         let total_m = q_m + k_m + v_m;
         let arch_supports_mb4 = matches!(self.arch.as_str(),
             "gfx1100" | "gfx1101" | "gfx1102" | "gfx1150" | "gfx1151");
@@ -7177,7 +7248,6 @@ impl Gpu {
             return self.gemm_qkv_hfq3g256_wmma_mb4(
                 a_q, a_k, a_v, x, y_q, y_k, y_v, q_m, k_m, v_m, k, batch_size);
         }
-        self.bind_thread()?;
         if has_wmma_f16_gfx12(&self.arch) {
             return self.gemm_qkv_hfq3g256_wmma_gfx12(
                 a_q, a_k, a_v, x, y_q, y_k, y_v, q_m, k_m, v_m, k, batch_size);
@@ -8102,6 +8172,7 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         let total_m = gate_m + up_m;
         let arch_supports_mb4 = matches!(self.arch.as_str(),
             "gfx1100" | "gfx1101" | "gfx1102" | "gfx1150" | "gfx1151");
@@ -8114,7 +8185,6 @@ impl Gpu {
             return self.gemm_gate_up_hfq3g256_wmma_mb4(
                 a_gate, a_up, x, y_gate, y_up, gate_m, up_m, k, batch_size);
         }
-        self.bind_thread()?;
         if has_wmma_f16_gfx12(&self.arch) {
             return self.gemm_gate_up_hfq3g256_wmma_gfx12(
                 a_gate, a_up, x, y_gate, y_up, gate_m, up_m, k, batch_size);
@@ -10308,6 +10378,7 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         let arch_supports_mb4 = matches!(self.arch.as_str(),
             "gfx1100" | "gfx1101" | "gfx1102" | "gfx1150" | "gfx1151");
         let use_mb4 = match std::env::var("HIPFIRE_MQ3_MB4").ok().as_deref() {
@@ -10318,7 +10389,6 @@ impl Gpu {
         if use_mb4 {
             return self.gemm_hfq3g256_residual_wmma_mb4(a_raw, x, y, m, k, batch_size);
         }
-        self.bind_thread()?;
         if has_wmma_f16_gfx12(&self.arch) {
             return self.gemm_hfq3g256_residual_wmma_gfx12(a_raw, x, y, m, k, batch_size);
         }
@@ -10782,6 +10852,7 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         self.ensure_kernel(
             "gemm_hfq4g256_residual_wave64_dp4a",
             kernels::GEMM_HFQ4G256_RESIDUAL_WAVE64_DP4A_SRC,
@@ -10871,6 +10942,7 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         self.ensure_kernel(
             "gemm_qkvza_hfq4g256_wave64_dp4a",
             kernels::GEMM_QKVZA_HFQ4G256_WAVE64_DP4A_SRC,
@@ -10979,6 +11051,7 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         self.ensure_kernel(
             "gemm_qkv_hfq4g256_wave64_dp4a",
             kernels::GEMM_QKV_HFQ4G256_WAVE64_DP4A_SRC,
@@ -11075,6 +11148,7 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         self.ensure_kernel(
             "gemm_gate_up_hfq4g256_wave64_dp4a",
             kernels::GEMM_GATE_UP_HFQ4G256_WAVE64_DP4A_SRC,
@@ -11372,6 +11446,7 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         let xq_ptr = self.ensure_q8_1_mmq_x(x, batch_size, k)?;
 
         self.ensure_kernel(
@@ -11788,6 +11863,7 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         let xq_ptr = self.ensure_q8_1_mmq_x(x, batch_size, k)?;
 
         self.ensure_kernel(
@@ -12255,6 +12331,7 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         let xq_ptr = self.ensure_q8_1_mmq_x(x, batch_size, k)?;
 
         self.ensure_kernel(
@@ -12680,6 +12757,7 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         let xq_ptr = self.ensure_q8_1_mmq_x(x, batch_size, k)?;
 
         self.ensure_kernel(
@@ -13143,6 +13221,7 @@ impl Gpu {
         k: usize,
         n: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         const MAX_BATCH: usize = 64;
         let mut off = 0;
         while off < n {
@@ -13166,6 +13245,7 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         if self.arch.starts_with("gfx12") {
             return self.gemm_qkvza_q8_0_wmma_gfx12(
                 a_qkv, a_z, a_beta, a_alpha, x, y_qkv, y_z, y_beta, y_alpha,
@@ -13177,7 +13257,6 @@ impl Gpu {
         // multiple of 32. All current production shapes satisfy this; guard
         // here to catch future shape regressions before they corrupt output.
         debug_assert_eq!(k % 32, 0, "gemm_qkvza_q8_0_wmma: K must be a multiple of 32 (got K={k})");
-        self.bind_thread()?;
         self.ensure_kernel(
             "gemm_qkvza_q8_0_wmma",
             kernels::GEMM_QKVZA_Q8_0_WMMA_SRC,
@@ -13258,13 +13337,13 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         if self.arch.starts_with("gfx12") {
             return self.gemm_gate_up_q8_0_wmma_gfx12(
                 a_gate, a_up, x, y_gate, y_up, gate_m, up_m, k, batch_size,
             );
         }
         debug_assert_eq!(k % 32, 0, "gemm_gate_up_q8_0_wmma: K must be a multiple of 32 (got K={k})");
-        self.bind_thread()?;
         self.ensure_kernel(
             "gemm_gate_up_q8_0_wmma",
             kernels::GEMM_GATE_UP_Q8_0_WMMA_SRC,
@@ -13334,11 +13413,11 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         if self.arch.starts_with("gfx12") {
             return self.gemm_q8_0_residual_wmma_gfx12(a, x, y, m, k, batch_size);
         }
         debug_assert_eq!(k % 32, 0, "gemm_q8_0_residual_wmma: K must be a multiple of 32 (got K={k})");
-        self.bind_thread()?;
         self.ensure_kernel(
             "gemm_q8_0_residual_wmma",
             kernels::GEMM_Q8_0_RESIDUAL_WMMA_SRC,
@@ -13398,13 +13477,13 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
+        self.bind_thread()?;
         if self.arch.starts_with("gfx12") {
             return self.gemm_qkv_q8_0_wmma_gfx12(
                 a_q, a_k, a_v, x, y_q, y_k, y_v, q_m, k_m, v_m, k, batch_size,
             );
         }
         debug_assert_eq!(k % 32, 0, "gemm_qkv_q8_0_wmma: K must be a multiple of 32 (got K={k})");
-        self.bind_thread()?;
         self.ensure_kernel(
             "gemm_qkv_q8_0_wmma",
             kernels::GEMM_QKV_Q8_0_WMMA_SRC,
@@ -13484,8 +13563,8 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
-        debug_assert_eq!(k % 32, 0, "gemm_qkv_q8_0_wmma_gfx12: K must be a multiple of 32 (got K={k})");
         self.bind_thread()?;
+        debug_assert_eq!(k % 32, 0, "gemm_qkv_q8_0_wmma_gfx12: K must be a multiple of 32 (got K={k})");
         self.ensure_kernel(
             "gemm_qkv_q8_0_wmma_gfx12",
             kernels::GEMM_QKV_Q8_0_WMMA_GFX12_SRC,
@@ -13560,8 +13639,8 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
-        debug_assert_eq!(k % 32, 0, "gemm_qkvza_q8_0_wmma_gfx12: K must be a multiple of 32 (got K={k})");
         self.bind_thread()?;
+        debug_assert_eq!(k % 32, 0, "gemm_qkvza_q8_0_wmma_gfx12: K must be a multiple of 32 (got K={k})");
         self.ensure_kernel(
             "gemm_qkvza_q8_0_wmma_gfx12",
             kernels::GEMM_QKVZA_Q8_0_WMMA_GFX12_SRC,
@@ -13641,8 +13720,8 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
-        debug_assert_eq!(k % 32, 0, "gemm_gate_up_q8_0_wmma_gfx12: K must be a multiple of 32 (got K={k})");
         self.bind_thread()?;
+        debug_assert_eq!(k % 32, 0, "gemm_gate_up_q8_0_wmma_gfx12: K must be a multiple of 32 (got K={k})");
         self.ensure_kernel(
             "gemm_gate_up_q8_0_wmma_gfx12",
             kernels::GEMM_GATE_UP_Q8_0_WMMA_GFX12_SRC,
@@ -13711,8 +13790,8 @@ impl Gpu {
         k: usize,
         batch_size: usize,
     ) -> HipResult<()> {
-        debug_assert_eq!(k % 32, 0, "gemm_q8_0_residual_wmma_gfx12: K must be a multiple of 32 (got K={k})");
         self.bind_thread()?;
+        debug_assert_eq!(k % 32, 0, "gemm_q8_0_residual_wmma_gfx12: K must be a multiple of 32 (got K={k})");
         self.ensure_kernel(
             "gemm_q8_0_residual_wmma_gfx12",
             kernels::GEMM_Q8_0_RESIDUAL_WMMA_GFX12_SRC,
@@ -19796,5 +19875,57 @@ impl Drop for Gpu {
             return;
         }
         self.bind_thread_or_warn();
+    }
+}
+
+#[cfg(test)]
+mod target_arch_tests {
+    use super::{minimum_hip_version, resolve_target_arch};
+
+    #[test]
+    fn detected_arch_is_canonicalized_without_feature_suffixes() {
+        assert_eq!(
+            resolve_target_arch(Some("gfx1100:sramecc+:xnack-"), None).unwrap(),
+            "gfx1100"
+        );
+        assert_eq!(
+            resolve_target_arch(Some("  GFX906  "), Some("")).unwrap(),
+            "gfx906"
+        );
+    }
+
+    #[test]
+    fn explicit_arch_wins_and_allows_generic_llvm_targets() {
+        assert_eq!(
+            resolve_target_arch(Some("gfx1100"), Some("gfx10-1-generic")).unwrap(),
+            "gfx10-1-generic"
+        );
+        assert_eq!(
+            resolve_target_arch(None, Some(" GFX12-GENERIC ")).unwrap(),
+            "gfx12-generic"
+        );
+    }
+
+    #[test]
+    fn missing_or_malformed_arch_fails_closed() {
+        for detected in [None, Some("unknown"), Some("gfx"), Some("gfx12"), Some("sm_90")] {
+            assert!(resolve_target_arch(detected, None).is_err(), "{detected:?}");
+        }
+        for override_arch in ["gfxunknown", "gfx11--generic", "gfx-generic", "gfx1100;bad"] {
+            assert!(
+                resolve_target_arch(Some("gfx1100"), Some(override_arch)).is_err(),
+                "{override_arch}"
+            );
+        }
+    }
+
+    #[test]
+    fn hip_version_floor_covers_arch_families() {
+        assert_eq!(minimum_hip_version("gfx1030"), (5, 0));
+        assert_eq!(minimum_hip_version("gfx1103"), (5, 5));
+        assert_eq!(minimum_hip_version("gfx11-generic"), (5, 5));
+        assert_eq!(minimum_hip_version("gfx1152"), (7, 2));
+        assert_eq!(minimum_hip_version("gfx1201"), (6, 4));
+        assert_eq!(minimum_hip_version("gfx12-generic"), (6, 4));
     }
 }
