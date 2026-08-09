@@ -48,6 +48,8 @@
 #                                            for your host)
 #   - HIPFIRE_AGENTIC_GATE_KEEP_OUTPUT=1 -> retain raw daemon JSONL beside
 #                                            the Markdown report for diagnosis
+#   - HIPFIRE_AGENTIC_FAST_MODEL=3.5|3.6 -> select the model used by --fast;
+#                                            default auto prefers 3.6
 #
 # Report destination: /tmp/agentic-gate-<timestamp>.md (or $HIPFIRE_AGENTIC_GATE_OUT)
 
@@ -55,6 +57,11 @@ set -u
 cd "$(dirname "$0")/.."
 
 MODE="full"
+FAST_MODEL="${HIPFIRE_AGENTIC_FAST_MODEL:-auto}"
+case "$FAST_MODEL" in
+    auto|3.5|3.6) ;;
+    *) echo "HIPFIRE_AGENTIC_FAST_MODEL must be auto, 3.5, or 3.6" >&2; exit 2 ;;
+esac
 while [ $# -gt 0 ]; do
     case "$1" in
         --fast)        MODE="fast"; ;;
@@ -329,13 +336,21 @@ build_cells() {
 
 CELLS=()
 if [ "$MODE" = "fast" ]; then
-    # Fast mode: prefer 3.6 (newer) if present; fall back to 3.5 if only it
-    # is installed. Never silently skip if at least one A3B is available.
-    if [ -f "$A3B_36" ]; then
+    # Fast mode defaults to the newer 3.6 model, with a 3.5 fallback. An
+    # explicit selector supports deterministic single-model diagnosis.
+    if [ "$FAST_MODEL" = "3.5" ] && [ -f "$A3B_35" ]; then
+        while IFS= read -r line; do
+            [ -n "$line" ] && CELLS+=("$line")
+        done < <(build_cells "$A3B_35" "3.5" 1)
+    elif [ "$FAST_MODEL" = "3.6" ] && [ -f "$A3B_36" ]; then
         while IFS= read -r line; do
             [ -n "$line" ] && CELLS+=("$line")
         done < <(build_cells "$A3B_36" "3.6" 1)
-    elif [ -f "$A3B_35" ]; then
+    elif [ "$FAST_MODEL" = "auto" ] && [ -f "$A3B_36" ]; then
+        while IFS= read -r line; do
+            [ -n "$line" ] && CELLS+=("$line")
+        done < <(build_cells "$A3B_36" "3.6" 1)
+    elif [ "$FAST_MODEL" = "auto" ] && [ -f "$A3B_35" ]; then
         while IFS= read -r line; do
             [ -n "$line" ] && CELLS+=("$line")
         done < <(build_cells "$A3B_35" "3.5" 1)

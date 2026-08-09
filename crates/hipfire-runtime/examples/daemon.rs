@@ -29,7 +29,9 @@ use hipfire_arch_qwen35::qwen35;
 use hipfire_arch_qwen35::qwen35::{DeltaNetState, LayerType, Qwen35ScratchSet};
 use hipfire_arch_qwen35_vl::qwen35_vl;
 use hipfire_runtime::sampler::{self, SamplerConfig};
-use hipfire_runtime::tool_call::required_hermes_name_quote_prefix;
+use hipfire_runtime::tool_call::{
+    required_empty_think_close, required_hermes_name_quote_prefix,
+};
 use hipfire_arch_qwen35::speculative::{
     self, DdtreeScratch, DeltaNetSnapshot, GdnTape, HiddenStateRingBuffer, VerifyScratch,
 };
@@ -3652,10 +3654,11 @@ fn generate(m: &mut LoadedModel, gpu: &mut rdna_compute::Gpu, stdout: &mut std::
         let mut bytes_fed_to_filter = 0usize;
         let mut filter = EosFilter::new(EosFilterConfig::default());
         let mut alert_fired = false;
-        // Prefix tokens injected by the narrow Hermes JSON name constraint.
-        // A queue keeps the mechanism tokenizer-independent when ` \"` is
+        // Prefix tokens injected by narrow structured-output constraints. A
+        // queue keeps the mechanism tokenizer-independent when a prefix is
         // represented by more than one token.
-        let mut forced_tool_prefix = std::collections::VecDeque::<u32>::new();
+        let mut forced_structured_prefix = std::collections::VecDeque::<u32>::new();
+        let mut empty_think_recovered = false;
         let mut tool_call_depth = 0usize;
         // max_think_tokens enforcement state. think_count increments only
         // while we observe ourselves to be inside a `<think>...</think>`
@@ -3682,8 +3685,24 @@ fn generate(m: &mut LoadedModel, gpu: &mut rdna_compute::Gpu, stdout: &mut std::
         // (which increments `generated` beyond the iteration count) can't
         // push generated past max_tokens: each loop start rechecks the cap.
         while generated < max_tokens {
-            if let Some(forced) = forced_tool_prefix.pop_front() {
+            let proposed_terminator = next_token == config.eos_token
+                || im_end_token == Some(next_token)
+                || tokenizer.is_terminator(next_token);
+            if let Some(forced) = forced_structured_prefix.pop_front() {
                 next_token = forced;
+            } else if !empty_think_recovered && proposed_terminator {
+                let context = tokenizer.decode(&streamed_tokens);
+                if let Some(prefix) =
+                    required_empty_think_close(&context, proposed_terminator)
+                {
+                    let prefix_tokens = tokenizer.encode(prefix);
+                    if !prefix_tokens.is_empty() && tokenizer.decode(&prefix_tokens) == prefix
+                    {
+                        next_token = prefix_tokens[0];
+                        forced_structured_prefix.extend(prefix_tokens.into_iter().skip(1));
+                        empty_think_recovered = true;
+                    }
+                }
             } else if tool_call_depth > 0 {
                 let context = tokenizer.decode(&streamed_tokens);
                 let candidate_bytes = tokenizer.decode_bytes(&[next_token]);
@@ -3695,7 +3714,7 @@ fn generate(m: &mut LoadedModel, gpu: &mut rdna_compute::Gpu, stdout: &mut std::
                         if !prefix_tokens.is_empty() && tokenizer.decode(&prefix_tokens) == prefix
                         {
                             next_token = prefix_tokens[0];
-                            forced_tool_prefix.extend(prefix_tokens.into_iter().skip(1));
+                            forced_structured_prefix.extend(prefix_tokens.into_iter().skip(1));
                         }
                     }
                 }

@@ -108,6 +108,33 @@ pub fn required_hermes_name_quote_prefix(context: &str, candidate: &str) -> Opti
     Some(prefix)
 }
 
+/// Close one empty thinking block before accepting a proposed terminator.
+///
+/// Some quantized thinking models emit `<think>` and immediately select EOS
+/// or `<|im_end|>`, leaving neither a well-formed reasoning block nor a visible
+/// answer. The caller may commit the returned close marker through the normal
+/// KV path and resample once. Non-empty reasoning, already-closed blocks, and
+/// non-terminator candidates are never changed.
+pub fn required_empty_think_close(
+    context: &str,
+    proposed_terminator: bool,
+) -> Option<&'static str> {
+    if !proposed_terminator {
+        return None;
+    }
+
+    const OPEN: &str = "<think>";
+    const CLOSE: &str = "</think>";
+    let open = context.rfind(OPEN)?;
+    if context.rfind(CLOSE).is_some_and(|close| close > open) {
+        return None;
+    }
+    context[open + OPEN.len()..]
+        .trim()
+        .is_empty()
+        .then_some("</think>\n")
+}
+
 // ── Hermes JSON parser ──────────────────────────────────────────────
 
 /// Hermes-style: `<tool_call>{"name": ..., "arguments": {...}}</tool_call>`.
@@ -583,6 +610,28 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn empty_think_terminator_requires_a_close_before_resampling() {
+        assert_eq!(
+            required_empty_think_close("<think>\n\n", true),
+            Some("</think>\n")
+        );
+        assert_eq!(required_empty_think_close("<think>\n\n", false), None);
+    }
+
+    #[test]
+    fn think_close_constraint_preserves_content_and_closed_blocks() {
+        assert_eq!(
+            required_empty_think_close("<think>reasoning", true),
+            None
+        );
+        assert_eq!(
+            required_empty_think_close("<think>\n</think>\n", true),
+            None
+        );
+        assert_eq!(required_empty_think_close("plain answer", true), None);
     }
 
     // ── Qwen3.5/3.6 XML parser ────────────────────────────────────
