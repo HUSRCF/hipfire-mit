@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! HFQ (.hfq) file loader for hipfire-native Q4_F16 quantized models.
 
 use crate::llama::{
@@ -8,7 +9,12 @@ use memmap2::Mmap;
 use rdna_compute::{DType, Gpu, GpuTensor};
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::{self, ErrorKind};
 use std::path::Path;
+
+const HFQ_MAGIC: &[u8; 4] = b"HFQM";
+const HFQ_VERSION_SUPPORTED: u32 = 1;
+const HFQ_HEADER_SIZE: usize = 32;
 
 /// Drop page cache for a file byte range via posix_fadvise(FADV_DONTNEED).
 /// On unified-memory APUs (e.g. Strix Halo), mmap'd model data and
@@ -60,9 +66,227 @@ pub struct HfqFile {
     pread_buf: std::cell::RefCell<Vec<u8>>,
 }
 
+struct ParsedHfq {
+    arch_id: u32,
+    metadata_json: String,
+    tensors: Vec<HfqTensorInfo>,
+    tensor_map: HashMap<String, usize>,
+}
+
+fn invalid_hfq(message: impl Into<String>) -> io::Error {
+    io::Error::new(ErrorKind::InvalidData, message.into())
+}
+
+fn take_hfq_bytes<'a>(
+    bytes: &'a [u8],
+    pos: &mut usize,
+    limit: usize,
+    len: usize,
+    field: &str,
+) -> io::Result<&'a [u8]> {
+    let end = pos
+        .checked_add(len)
+        .ok_or_else(|| invalid_hfq(format!("HFQ {field} offset overflow")))?;
+    if end > limit || end > bytes.len() {
+        return Err(invalid_hfq(format!("truncated HFQ {field}")));
+    }
+    let out = &bytes[*pos..end];
+    *pos = end;
+    Ok(out)
+}
+
+fn read_hfq_u8(bytes: &[u8], pos: &mut usize, limit: usize, field: &str) -> io::Result<u8> {
+    Ok(take_hfq_bytes(bytes, pos, limit, 1, field)?[0])
+}
+
+fn read_hfq_u16(bytes: &[u8], pos: &mut usize, limit: usize, field: &str) -> io::Result<u16> {
+    let raw = take_hfq_bytes(bytes, pos, limit, 2, field)?;
+    Ok(u16::from_le_bytes([raw[0], raw[1]]))
+}
+
+fn read_hfq_u32(bytes: &[u8], pos: &mut usize, limit: usize, field: &str) -> io::Result<u32> {
+    let raw = take_hfq_bytes(bytes, pos, limit, 4, field)?;
+    Ok(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
+}
+
+fn read_hfq_u64(bytes: &[u8], pos: &mut usize, limit: usize, field: &str) -> io::Result<u64> {
+    let raw = take_hfq_bytes(bytes, pos, limit, 8, field)?;
+    Ok(u64::from_le_bytes([
+        raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
+    ]))
+}
+
+fn hfq_usize(value: u64, field: &str) -> io::Result<usize> {
+    usize::try_from(value).map_err(|_| invalid_hfq(format!("HFQ {field} does not fit this host")))
+}
+
+/// Parse and validate the complete HFQ header and tensor index before any
+/// input-derived slice is constructed. Tensor payload bytes remain opaque to
+/// this layer; their quantization-specific shape contracts are checked by the
+/// corresponding weight loaders.
+fn parse_hfq_bytes(bytes: &[u8]) -> io::Result<ParsedHfq> {
+    if bytes.len() < HFQ_HEADER_SIZE {
+        return Err(invalid_hfq(format!(
+            "truncated HFQ header: {} bytes (need {HFQ_HEADER_SIZE})",
+            bytes.len()
+        )));
+    }
+    if bytes.get(..HFQ_MAGIC.len()) != Some(HFQ_MAGIC.as_slice()) {
+        return Err(invalid_hfq("invalid HFQ magic"));
+    }
+
+    let mut header_pos = HFQ_MAGIC.len();
+    let version = read_hfq_u32(bytes, &mut header_pos, HFQ_HEADER_SIZE, "version")?;
+    if version != HFQ_VERSION_SUPPORTED {
+        return Err(invalid_hfq(format!(
+            "unsupported HFQ version {version}; this build supports {HFQ_VERSION_SUPPORTED}"
+        )));
+    }
+    let arch_id = read_hfq_u32(bytes, &mut header_pos, HFQ_HEADER_SIZE, "architecture")?;
+    let n_tensors = read_hfq_u32(bytes, &mut header_pos, HFQ_HEADER_SIZE, "tensor count")? as usize;
+    let metadata_offset = hfq_usize(
+        read_hfq_u64(bytes, &mut header_pos, HFQ_HEADER_SIZE, "metadata offset")?,
+        "metadata offset",
+    )?;
+    let data_offset = hfq_usize(
+        read_hfq_u64(bytes, &mut header_pos, HFQ_HEADER_SIZE, "data offset")?,
+        "data offset",
+    )?;
+
+    if metadata_offset < HFQ_HEADER_SIZE {
+        return Err(invalid_hfq(format!(
+            "HFQ metadata offset {metadata_offset} overlaps the {HFQ_HEADER_SIZE}-byte header"
+        )));
+    }
+    if metadata_offset >= data_offset {
+        return Err(invalid_hfq(format!(
+            "HFQ offsets are not ordered: metadata={metadata_offset}, data={data_offset}"
+        )));
+    }
+    if data_offset > bytes.len() {
+        return Err(invalid_hfq(format!(
+            "HFQ data offset {data_offset} exceeds file length {}",
+            bytes.len()
+        )));
+    }
+
+    let metadata_and_index = &bytes[metadata_offset..data_offset];
+    if metadata_and_index
+        .iter()
+        .copied()
+        .find(|byte| !byte.is_ascii_whitespace())
+        != Some(b'{')
+    {
+        return Err(invalid_hfq("HFQ metadata JSON must be an object"));
+    }
+    let mut metadata_stream = serde_json::Deserializer::from_slice(metadata_and_index)
+        .into_iter::<serde::de::IgnoredAny>();
+    metadata_stream
+        .next()
+        .ok_or_else(|| invalid_hfq("HFQ metadata JSON is empty"))?
+        .map_err(|err| invalid_hfq(format!("invalid HFQ metadata JSON: {err}")))?;
+    let metadata_len = metadata_stream.byte_offset();
+    if metadata_len == 0 {
+        return Err(invalid_hfq("HFQ metadata JSON has no complete value"));
+    }
+    let metadata_json = std::str::from_utf8(&metadata_and_index[..metadata_len])
+        .map_err(|err| invalid_hfq(format!("HFQ metadata is not UTF-8: {err}")))?
+        .to_owned();
+
+    let mut pos = metadata_offset
+        .checked_add(metadata_len)
+        .ok_or_else(|| invalid_hfq("HFQ metadata end offset overflow"))?;
+    let index_count = read_hfq_u32(bytes, &mut pos, data_offset, "index tensor count")? as usize;
+    if index_count != n_tensors {
+        return Err(invalid_hfq(format!(
+            "HFQ tensor count mismatch: header={n_tensors}, index={index_count}"
+        )));
+    }
+
+    // Even a scalar with an empty name needs 16 bytes of fixed index data.
+    // Reject impossible counts before reserving attacker-controlled capacity.
+    const MIN_TENSOR_RECORD_BYTES: usize = 2 + 1 + 1 + 4 + 8;
+    if n_tensors > (data_offset - pos) / MIN_TENSOR_RECORD_BYTES {
+        return Err(invalid_hfq(format!(
+            "HFQ tensor count {n_tensors} cannot fit in the declared index"
+        )));
+    }
+
+    let mut tensors = Vec::with_capacity(n_tensors);
+    let mut tensor_map = HashMap::with_capacity(n_tensors);
+    let mut cumulative_offset = data_offset;
+
+    for tensor_idx in 0..n_tensors {
+        let name_len = read_hfq_u16(bytes, &mut pos, data_offset, "tensor name length")? as usize;
+        if name_len == 0 {
+            return Err(invalid_hfq(format!(
+                "HFQ tensor {tensor_idx} has an empty name"
+            )));
+        }
+        let name_bytes = take_hfq_bytes(bytes, &mut pos, data_offset, name_len, "tensor name")?;
+        let name = std::str::from_utf8(name_bytes)
+            .map_err(|err| {
+                invalid_hfq(format!("HFQ tensor {tensor_idx} name is not UTF-8: {err}"))
+            })?
+            .to_owned();
+        let quant_type = read_hfq_u8(bytes, &mut pos, data_offset, "tensor quant type")?;
+        let n_dims = read_hfq_u8(bytes, &mut pos, data_offset, "tensor dimension count")? as usize;
+        let mut shape = Vec::with_capacity(n_dims);
+        for _ in 0..n_dims {
+            shape.push(read_hfq_u32(
+                bytes,
+                &mut pos,
+                data_offset,
+                "tensor dimension",
+            )?);
+        }
+        let group_size = read_hfq_u32(bytes, &mut pos, data_offset, "tensor group size")?;
+        let data_size = hfq_usize(
+            read_hfq_u64(bytes, &mut pos, data_offset, "tensor data size")?,
+            "tensor data size",
+        )?;
+        let tensor_end = cumulative_offset
+            .checked_add(data_size)
+            .ok_or_else(|| invalid_hfq(format!("HFQ tensor {name:?} data range overflows")))?;
+        if tensor_end > bytes.len() {
+            return Err(invalid_hfq(format!(
+                "HFQ tensor {name:?} data range {cumulative_offset}..{tensor_end} exceeds file length {}",
+                bytes.len()
+            )));
+        }
+        if tensor_map.insert(name.clone(), tensor_idx).is_some() {
+            return Err(invalid_hfq(format!("duplicate HFQ tensor name {name:?}")));
+        }
+
+        tensors.push(HfqTensorInfo {
+            name,
+            quant_type,
+            shape,
+            group_size,
+            data_offset: cumulative_offset,
+            data_size,
+        });
+        cumulative_offset = tensor_end;
+    }
+
+    Ok(ParsedHfq {
+        arch_id,
+        metadata_json,
+        tensors,
+        tensor_map,
+    })
+}
+
 impl HfqFile {
     pub fn open(path: &Path) -> std::io::Result<Self> {
         let file = File::open(path)?;
+        let file_len = hfq_usize(file.metadata()?.len(), "file length")?;
+        if file_len < HFQ_HEADER_SIZE {
+            return Err(invalid_hfq(format!(
+                "{}: truncated HFQ header: {file_len} bytes (need {HFQ_HEADER_SIZE})",
+                path.display()
+            )));
+        }
         let mmap = unsafe { Mmap::map(&file)? };
         // Sequential access hint: helps the kernel readahead and drop pages sooner.
         #[cfg(unix)]
@@ -75,100 +299,13 @@ impl HfqFile {
             }
         }
 
-        // Parse header (32 bytes)
-        let magic = &mmap[0..4];
-        assert_eq!(magic, b"HFQM", "Not an HFQ file");
-        let _version = u32::from_le_bytes(mmap[4..8].try_into().unwrap());
-        let arch_id = u32::from_le_bytes(mmap[8..12].try_into().unwrap());
-        let n_tensors = u32::from_le_bytes(mmap[12..16].try_into().unwrap()) as usize;
-        let metadata_offset = u64::from_le_bytes(mmap[16..24].try_into().unwrap()) as usize;
-        let data_offset = u64::from_le_bytes(mmap[24..32].try_into().unwrap()) as usize;
-
-        // Read metadata JSON
-        // Metadata ends at the tensor index, which starts right after metadata
-        // The tensor index is at metadata_offset + metadata_len
-        // We need to find where the index starts - it's right after metadata
-        // The index starts with a u32 tensor count
-        // Let's scan for it by reading from metadata_offset until we find the tensor count
-        let index_start = metadata_offset;
-        // First, find the metadata end by looking for the tensor count in the index
-        // The metadata is a JSON blob. The index follows immediately.
-        // We know data_offset, so index is between metadata_offset and data_offset.
-        // The index format starts with n_tensors u32. We need to find where metadata ends.
-        // Since we wrote metadata then index, and metadata_offset = 32 (header size),
-        // we need the metadata length. Let's parse the JSON to find its end.
-        let meta_bytes = &mmap[metadata_offset..data_offset];
-        // Find end of JSON by scanning for matching braces
-        let mut brace_depth = 0i32;
-        let mut in_string = false;
-        let mut escape = false;
-        let mut json_end = 0;
-        for (i, &b) in meta_bytes.iter().enumerate() {
-            if escape {
-                escape = false;
-                continue;
-            }
-            if b == b'\\' && in_string {
-                escape = true;
-                continue;
-            }
-            if b == b'"' {
-                in_string = !in_string;
-                continue;
-            }
-            if !in_string {
-                if b == b'{' { brace_depth += 1; }
-                if b == b'}' {
-                    brace_depth -= 1;
-                    if brace_depth == 0 {
-                        json_end = i + 1;
-                        break;
-                    }
-                }
-            }
-        }
-        let metadata_json = String::from_utf8_lossy(&meta_bytes[..json_end]).to_string();
-
-        // Parse tensor index (follows metadata JSON)
-        let mut pos = metadata_offset + json_end;
-        let idx_n = u32::from_le_bytes(mmap[pos..pos + 4].try_into().unwrap()) as usize;
-        assert_eq!(idx_n, n_tensors);
-        pos += 4;
-
-        let mut tensors = Vec::with_capacity(n_tensors);
-        let mut tensor_map = HashMap::new();
-        let mut cumulative_offset = data_offset;
-
-        for i in 0..n_tensors {
-            let name_len = u16::from_le_bytes(mmap[pos..pos + 2].try_into().unwrap()) as usize;
-            pos += 2;
-            let name = String::from_utf8_lossy(&mmap[pos..pos + name_len]).to_string();
-            pos += name_len;
-            let quant_type = mmap[pos];
-            pos += 1;
-            let n_dims = mmap[pos] as usize;
-            pos += 1;
-            let mut shape = Vec::with_capacity(n_dims);
-            for _ in 0..n_dims {
-                shape.push(u32::from_le_bytes(mmap[pos..pos + 4].try_into().unwrap()));
-                pos += 4;
-            }
-            let group_size = u32::from_le_bytes(mmap[pos..pos + 4].try_into().unwrap());
-            pos += 4;
-            let data_size = u64::from_le_bytes(mmap[pos..pos + 8].try_into().unwrap()) as usize;
-            pos += 8;
-
-            tensor_map.insert(name.clone(), i);
-            tensors.push(HfqTensorInfo {
-                name,
-                quant_type,
-                shape,
-                group_size,
-                data_offset: cumulative_offset,
-                data_size,
-            });
-            cumulative_offset += data_size;
-        }
+        let ParsedHfq {
+            arch_id,
+            metadata_json,
+            tensors,
+            tensor_map,
+        } = parse_hfq_bytes(&mmap)
+            .map_err(|err| io::Error::new(err.kind(), format!("{}: {err}", path.display())))?;
 
         Ok(Self {
             _file: file,
@@ -728,4 +865,190 @@ pub fn load_weights_hfq(
     }
 
     Ok(LlamaWeights { token_embd, embd_format: embd_fmt, output_norm, output, layers })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestTensor<'a> {
+        name: &'a str,
+        quant_type: u8,
+        shape: &'a [u32],
+        group_size: u32,
+        data: &'a [u8],
+    }
+
+    fn build_hfq(metadata: &str, tensors: &[TestTensor<'_>]) -> Vec<u8> {
+        let mut index = Vec::new();
+        index.extend_from_slice(&(tensors.len() as u32).to_le_bytes());
+        for tensor in tensors {
+            index.extend_from_slice(&(tensor.name.len() as u16).to_le_bytes());
+            index.extend_from_slice(tensor.name.as_bytes());
+            index.push(tensor.quant_type);
+            index.push(tensor.shape.len() as u8);
+            for dim in tensor.shape {
+                index.extend_from_slice(&dim.to_le_bytes());
+            }
+            index.extend_from_slice(&tensor.group_size.to_le_bytes());
+            index.extend_from_slice(&(tensor.data.len() as u64).to_le_bytes());
+        }
+
+        let metadata_offset = HFQ_HEADER_SIZE as u64;
+        let data_offset = metadata_offset + metadata.len() as u64 + index.len() as u64;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(HFQ_MAGIC);
+        bytes.extend_from_slice(&HFQ_VERSION_SUPPORTED.to_le_bytes());
+        bytes.extend_from_slice(&5u32.to_le_bytes());
+        bytes.extend_from_slice(&(tensors.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&metadata_offset.to_le_bytes());
+        bytes.extend_from_slice(&data_offset.to_le_bytes());
+        bytes.extend_from_slice(metadata.as_bytes());
+        bytes.extend_from_slice(&index);
+        for tensor in tensors {
+            bytes.extend_from_slice(tensor.data);
+        }
+        bytes
+    }
+
+    fn parse_error(bytes: &[u8]) -> String {
+        match parse_hfq_bytes(bytes) {
+            Ok(_) => panic!("malformed HFQ unexpectedly parsed"),
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[test]
+    fn parses_valid_header_index_and_payload_ranges() {
+        let metadata = r#"{"config":{"model_type":"qwen3"}}"#;
+        let tensors = [
+            TestTensor {
+                name: "model.embed_tokens.weight",
+                quant_type: 13,
+                shape: &[2, 4],
+                group_size: 256,
+                data: &[1, 2, 3],
+            },
+            TestTensor {
+                name: "lm_head.weight",
+                quant_type: 1,
+                shape: &[4],
+                group_size: 0,
+                data: &[4, 5],
+            },
+        ];
+        let bytes = build_hfq(metadata, &tensors);
+        let parsed = parse_hfq_bytes(&bytes).expect("valid HFQ");
+
+        assert_eq!(parsed.arch_id, 5);
+        assert_eq!(parsed.metadata_json, metadata);
+        assert_eq!(parsed.tensors.len(), 2);
+        assert_eq!(parsed.tensors[0].shape, vec![2, 4]);
+        assert_eq!(parsed.tensors[0].quant_type, 13);
+        assert_eq!(
+            parsed.tensors[1].data_offset,
+            parsed.tensors[0].data_offset + 3
+        );
+        assert_eq!(
+            &bytes[parsed.tensors[1].data_offset..parsed.tensors[1].data_offset + 2],
+            &[4, 5]
+        );
+        assert_eq!(parsed.tensor_map["lm_head.weight"], 1);
+    }
+
+    #[test]
+    fn rejects_truncated_header_bad_magic_and_future_version() {
+        assert!(parse_error(&[0; HFQ_HEADER_SIZE - 1]).contains("truncated HFQ header"));
+
+        let mut bytes = build_hfq("{}", &[]);
+        bytes[0] = b'X';
+        assert!(parse_error(&bytes).contains("invalid HFQ magic"));
+
+        let mut bytes = build_hfq("{}", &[]);
+        bytes[4..8].copy_from_slice(&2u32.to_le_bytes());
+        assert!(parse_error(&bytes).contains("unsupported HFQ version 2"));
+    }
+
+    #[test]
+    fn rejects_invalid_offsets_and_metadata() {
+        let mut bytes = build_hfq("{}", &[]);
+        bytes[16..24].copy_from_slice(&31u64.to_le_bytes());
+        assert!(parse_error(&bytes).contains("overlaps the 32-byte header"));
+
+        let mut bytes = build_hfq("{}", &[]);
+        let past_end = bytes.len() as u64 + 1;
+        bytes[24..32].copy_from_slice(&past_end.to_le_bytes());
+        assert!(parse_error(&bytes).contains("exceeds file length"));
+
+        let bytes = build_hfq("{", &[]);
+        assert!(parse_error(&bytes).contains("invalid HFQ metadata JSON"));
+
+        let bytes = build_hfq("[]", &[]);
+        assert!(parse_error(&bytes).contains("metadata JSON must be an object"));
+    }
+
+    #[test]
+    fn rejects_header_index_count_mismatch_and_impossible_capacity() {
+        let mut bytes = build_hfq("{}", &[]);
+        bytes[12..16].copy_from_slice(&1u32.to_le_bytes());
+        assert!(parse_error(&bytes).contains("tensor count mismatch"));
+
+        let mut bytes = build_hfq("{}", &[]);
+        bytes[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+        let index_count_offset = HFQ_HEADER_SIZE + 2;
+        bytes[index_count_offset..index_count_offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(parse_error(&bytes).contains("cannot fit in the declared index"));
+    }
+
+    #[test]
+    fn rejects_duplicate_or_non_utf8_tensor_names() {
+        let duplicate = [
+            TestTensor {
+                name: "weight",
+                quant_type: 1,
+                shape: &[1],
+                group_size: 0,
+                data: &[0, 0],
+            },
+            TestTensor {
+                name: "weight",
+                quant_type: 1,
+                shape: &[1],
+                group_size: 0,
+                data: &[0, 0],
+            },
+        ];
+        assert!(parse_error(&build_hfq("{}", &duplicate)).contains("duplicate HFQ tensor name"));
+
+        let tensor = [TestTensor {
+            name: "weight",
+            quant_type: 1,
+            shape: &[1],
+            group_size: 0,
+            data: &[0, 0],
+        }];
+        let mut bytes = build_hfq("{}", &tensor);
+        let first_name_byte = HFQ_HEADER_SIZE + 2 + 4 + 2;
+        bytes[first_name_byte] = 0xff;
+        assert!(parse_error(&bytes).contains("name is not UTF-8"));
+    }
+
+    #[test]
+    fn rejects_truncated_index_and_payload() {
+        let tensor = [TestTensor {
+            name: "weight",
+            quant_type: 1,
+            shape: &[1],
+            group_size: 0,
+            data: &[0, 0],
+        }];
+        let mut bytes = build_hfq("{}", &tensor);
+        let data_offset = u64::from_le_bytes(bytes[24..32].try_into().unwrap());
+        bytes[24..32].copy_from_slice(&(data_offset - 1).to_le_bytes());
+        assert!(parse_error(&bytes).contains("truncated HFQ tensor data size"));
+
+        let mut bytes = build_hfq("{}", &tensor);
+        bytes.pop();
+        assert!(parse_error(&bytes).contains("data range"));
+    }
 }
