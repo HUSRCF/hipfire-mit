@@ -1,7 +1,9 @@
+# SPDX-License-Identifier: MIT
 [package]
 name = "hipfire-quantize"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 memmap2 = "0.9"

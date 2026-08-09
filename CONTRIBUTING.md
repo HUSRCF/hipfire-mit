@@ -1,4 +1,12 @@
-# Contributing to hipfire
+<!-- SPDX-License-Identifier: MIT -->
+# Contributing to hipfire-mit
+
+All changes in this repository are clean-room implementations under MIT.
+Before starting, read
+[CLEANROOM_BOUNDARY.md](CLEANROOM_BOUNDARY.md) and
+[docs/cleanroom/IMPLEMENTATION_POLICY.md](docs/cleanroom/IMPLEMENTATION_POLICY.md).
+Do not consult or reproduce source, diffs, commit bodies, or symbol-level
+descriptions from versions after the clean-room boundary.
 
 hipfire is alpha. Real-world testing on cards we don't have, kernel work
 on archs we don't ship for, bug reports with full reproduction, and new
@@ -53,8 +61,8 @@ the case we want filed.
 ### Setup
 
 ```bash
-git clone https://github.com/Kaden-Schutt/hipfire
-cd hipfire
+git clone https://github.com/HUSRCF/hipfire-mit
+cd hipfire-mit
 cargo build --release --features deltanet --example daemon -p hipfire-runtime
 cargo build --release --features deltanet --example test_kernels -p hipfire-runtime
 cargo build --release -p hipfire-quantize

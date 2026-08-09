@@ -1,6 +1,15 @@
+<!-- SPDX-License-Identifier: MIT -->
 ## Summary
 
 <one or two sentences>
+
+## Clean-room declaration
+
+- [ ] I used only the MIT baseline, public specifications/documentation,
+      black-box observations, and the metadata-only direction table.
+- [ ] I did not inspect or reproduce post-boundary source, diffs, commit
+      bodies, file paths, symbols, constants, or implementation details.
+- [ ] New or modified implementation files carry an MIT SPDX identifier.
 
 ## Which crate(s) does this touch?
 
@@ -22,6 +31,17 @@
 - [ ] `cargo test --lib --workspace --features deltanet` passes
 - [ ] If kernel/dispatch changed: `./scripts/coherence-gate.sh` clean
 - [ ] If perf-relevant: `./scripts/speed-gate.sh` within ±2% of locked baselines
+
+## Performance evidence
+
+- Baseline commit:
+- Candidate commit:
+- GPU / ROCm:
+- Exact command and flags:
+- Prompt path and md5:
+- Binary md5:
+- Fresh-process runs and medians:
+- Correctness/coherence report:
 
 ## Architecture-trait change?
 

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# hipfire clean-room speed-gate baseline — Radeon Pro W7900 (gfx1100, 48 GB)
+# Captured 2026-08-09 against the unmodified inference path at d657b7c.
+# Select explicitly with HIPFIRE_BASELINE_ARCH=gfx1100-w7900.
+# ROCm/HIP: 7.14.60850; KV=asym3; HIPFIRE_GRAPH=1; DPM warm-up=3s.
+# Board limit observed in sysfs: SCLK 1760 MHz, MCLK 1124 MHz.
+#
+# Three fresh-process samples, synthetic pp32 prompt:
+#   prefill tok/s: 1094.1, 1227.3, 1280.9 (median 1227.3)
+#   decode tok/s:   141.5,  140.9,  140.8 (median  140.9)
+# Binary md5: b9ee77210d15b23228f49cabb6f19cb7
+# Model md5:  712b69f8cf1016081cfa507c4d50e33d
+# The RX 7900 XTX gfx1100 baseline remains unchanged; board profiles must
+# not be merged because their clock, memory, and power limits differ.
+
+4b_mq4_pp32_prefill_tok_s=1227.3
+4b_mq4_gen_tok_s=140.9

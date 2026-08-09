@@ -1,4 +1,14 @@
-# hipfire
+<!-- SPDX-License-Identifier: MIT -->
+# hipfire-mit
+
+This repository is the independent MIT clean-room continuation of
+`hipfire` from its last verifiable pure-MIT snapshot. New work is
+implemented from public specifications, hardware documentation, black-box
+behavior, and the high-level metadata-only directions in
+[CLEANROOM_COMMIT_DIRECTIONS.md](CLEANROOM_COMMIT_DIRECTIONS.md). See
+[CLEANROOM_BOUNDARY.md](CLEANROOM_BOUNDARY.md) and the
+[clean-room implementation policy](docs/cleanroom/IMPLEMENTATION_POLICY.md)
+before contributing.
 
 LLM inference for AMD RDNA GPUs. Rust + HIP. Single binary. No Python
 in the hot path. Ollama-style UX.
@@ -10,8 +20,6 @@ hipfire serve -d        # background daemon, OpenAI-compatible API on 0.0.0.0:11
 ```
 
 Current release: **v0.1.20** — engine modularization. See [CHANGELOG.md](CHANGELOG.md).
-
-Discord: <https://discord.gg/F3BaywB8Rs>
 
 ## Why
 
@@ -45,7 +53,7 @@ and the cross-arch matrix (RDNA1 / RDNA2 / APU / MI300X).
 Linux with ROCm 6+:
 
 ```bash
-curl -L https://raw.githubusercontent.com/Kaden-Schutt/hipfire/master/scripts/install.sh | bash
+curl -L https://raw.githubusercontent.com/HUSRCF/hipfire-mit/main/scripts/install.sh | bash
 ```
 
 For Windows, source builds, and verifying the install:
@@ -56,15 +64,15 @@ For Windows, source builds, and verifying the install:
 First-class support via Nix flake. See [docs/NIXOS.md](docs/NIXOS.md).
 
 ```bash
-nix develop github:Kaden-Schutt/hipfire  # dev shell with Rust + ROCm + bun
-nix build github:Kaden-Schutt/hipfire    # build package
+nix develop github:HUSRCF/hipfire-mit  # dev shell with Rust + ROCm + bun
+nix build github:HUSRCF/hipfire-mit    # build package
 ```
 
 NixOS module:
 
 ```nix
 {
-  inputs.hipfire.url = "github:Kaden-Schutt/hipfire";
+  inputs.hipfire.url = "github:HUSRCF/hipfire-mit";
   # then in configuration.nix:
   services.hipfire.enable = true;
   services.hipfire.gpuTargets = [ "gfx1100" ];

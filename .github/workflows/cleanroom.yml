@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+name: clean-room
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  provenance-and-license:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify MIT clean-room boundary
+        run: ./scripts/cleanroom-gate.sh mit-baseline-20260519
