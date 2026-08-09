@@ -109,9 +109,32 @@ outputs were manually reviewed. Full measurements are in
 `docs/cleanroom/PERFORMANCE_RECORD.md`.
 
 The agentic gate exposed a deterministic malformed tool-call JSON response on
-the installed Qwen 3.6 27B model. A clean detached parent build and the
+the installed Qwen 3.6 27B model. A clean detached parent build and the device
 candidate build had different daemon hashes but produced byte-identical bad
-JSON twice on the candidate and once on the parent. This proves it predates
-the device change; the targeted agentic skip used for this one commit is
-recorded rather than presented as a pass. Tool-call structural correctness is
-the next independent repair item.
+JSON twice on the candidate and once on the parent, proving it predated the
+device change. The targeted agentic skip used for that one commit is recorded
+rather than presented as a pass.
+
+Commit `76dd2b97bd83ab61839f7bf02988f41c49f8c2fb` independently closes
+that structural failure with a narrow generation constraint. It only activates
+inside an unclosed Hermes tool-call body stopped exactly after the first
+`"name":` key and only when the proposed value begins as an unquoted
+identifier. The valid JSON string prefix is committed through the normal KV
+path before resampling; unrelated malformed output remains visible to the
+validator. The regular decode path maintains only an O(1) tool-call depth
+counter.
+
+The fixed 27B fast cell now passes with valid `name` and `arguments` and zero
+warnings. In the full eight-cell matrix, all four 27B cells and both 35B Pi
+cells pass; there are zero structural hard failures. Two 35B Hermes cells
+still soft-warn because that model terminates without selecting a tool, so the
+full aggregate remains open. Commit
+`658baa8a7fd5e2f45fd4ffadd7577e89391702ba` adds the daemon, tool-call
+module, and agentic gate itself to pre-commit hotspot coverage, with a static
+test protecting those mappings.
+
+All 164 `hipfire-runtime` library tests pass. Three GPU0 performance
+observations have median 1320.6 prefill tok/s and 142.1 decode tok/s,
+respectively +7.60% and +0.85% over the committed W7900 floor. Detailed
+quality reports and measurements are recorded in
+`docs/cleanroom/PERFORMANCE_RECORD.md`.

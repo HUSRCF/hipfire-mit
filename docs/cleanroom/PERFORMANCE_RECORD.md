@@ -195,3 +195,60 @@ Copy this section for each performance-sensitive milestone.
 - Decision: accept the device-execution foundation; do not mark all M2 rows
   complete until the remaining format, maintenance, integration, and agentic
   correctness work is closed.
+
+---
+
+## M2 follow-up: agentic JSON structural contract — 2026-08-09
+
+### Run identity
+
+- Regression parent: `3a241b1`; the earlier detached `0ba6282` A/B established
+  that the malformed response predated the intervening device-only changes.
+- Structural fix: `76dd2b97bd83ab61839f7bf02988f41c49f8c2fb`.
+- Gate-coverage fix: `658baa8a7fd5e2f45fd4ffadd7577e89391702ba`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Candidate daemon md5: `d816324399c294e26f5915d194da51d7`.
+- Candidate benchmark binary md5:
+  `a2442c9857978cbbdb6f9d6826ddedff`.
+- Agentic target models:
+  `/home/husrcf/.hipfire/models/qwen3.6-27b.mq4` and
+  `/home/husrcf/.hipfire/models/qwen3.5-35b-a3b.mq4` (read-only).
+- Agentic inputs: `benchmarks/prompts/agentic_pi_system.txt`,
+  `benchmarks/prompts/agentic_hermes_system.txt`, and
+  `benchmarks/prompts/agentic_user_read.txt`.
+- Environment: `ROCR_VISIBLE_DEVICES=0`, `HIP_VISIBLE_DEVICES=0`,
+  `HIPFIRE_MODELS_DIR=/home/husrcf/.hipfire/models`, and ROCm 7.14 runtime
+  directories prepended to `LD_LIBRARY_PATH`.
+- Quality commands: `./scripts/agentic-gate.sh --fast` and the full
+  `./scripts/agentic-gate.sh`, serialized by `scripts/gpu-lock.sh`.
+- Performance command: `./scripts/speed-gate.sh --fast --verbose` with
+  `HIPFIRE_BASELINE_ARCH=gfx1100-w7900`. Each observation is the gate's best
+  of two benchmark executions.
+
+### Measurements
+
+| Metric | Committed floor | Candidate observation 1 | Candidate observation 2 | Candidate observation 3 | Candidate median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1351.6 | 1320.6 | 1309.8 | 1320.6 |
+| 4B MQ4 decode tok/s | 140.9 | 142.5 | 142.1 | 141.8 | 142.1 |
+
+### Decision
+
+- Candidate median delta: +7.60% prefill and +0.85% decode. All three
+  observations pass the committed floor.
+- Correctness: all 164 `hipfire-runtime` library tests pass, including the
+  valid, malformed-name, unrelated-output, and closed-block constraint cases.
+  The daemon example compiles with the `deltanet` feature, the agentic detector
+  self-check fires all four predicates, and the clean-room gate passes.
+- Fast GPU0 quality: PASS, zero hard failures and zero soft warnings. The raw
+  Qwen 3.6 27B response contains valid JSON with `name='read'` and an
+  `arguments` object. Post-commit report:
+  `/tmp/agentic-76dd2b9-postcommit.md`.
+- Full GPU0 quality: all eight cells complete with zero structural hard
+  failures. Four Qwen 3.6 cells and two Qwen 3.5 Pi cells pass. Two Qwen 3.5
+  Hermes cells soft-warn because the model emits `<think><|im_end|>` without a
+  tool call, so the aggregate threshold still returns failure. Report:
+  `/tmp/agentic-m2-quote-constraint-full.md`.
+- Decision: accept the bounded JSON structural fix and keep the 35B Hermes
+  tool-selection reliability item open; do not weaken the full-gate threshold.
