@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # speed-gate.sh — MQ4 prefill/decode speed regression gate.
 #
 # Runs bench_qwen35_mq4 on each available MQ4 model and compares
@@ -120,17 +121,18 @@ else
 fi
 
 ensure_build() {
-    if [ ! -x "$EXE" ]; then
-        echo "Building bench_qwen35_mq4 (release)..."
-        cargo build --release -p hipfire-runtime --example bench_qwen35_mq4 --features deltanet 2>&1 \
-            | grep -E '^(error|   Compiling)' | tail -5
-        if [ ! -x "$EXE" ]; then
-            color red "BUILD FAILED"; echo
-            exit 2
-        fi
+    # Always ask Cargo to validate freshness. Merely checking that the binary
+    # exists can benchmark an executable linked before the current runtime
+    # change; an up-to-date Cargo check is cheap and relinks only when needed.
+    local examples=(--example bench_qwen35_mq4)
+    if [ "$FAST" -eq 0 ]; then
+        examples+=(--example dflash_spec_demo)
     fi
-    # DFlash gate is opt-in by default — only requires dflash_spec_demo + the
-    # 27B target + draft + prompt file. Skip silently if unavailable.
+    if ! cargo build --quiet --release -p hipfire-runtime \
+        "${examples[@]}" --features deltanet; then
+        color red "BUILD FAILED"; echo
+        exit 2
+    fi
 }
 
 # DFlash LRU-code gate. Echoes "tok_s tau" or one of: MISSING_TARGET,
