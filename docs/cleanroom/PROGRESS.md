@@ -26,6 +26,7 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M10: tokenizer special-token scan | 51 | complete | byte-identical single-pass special-token discovery with reproducible CPU and GPU0 performance evidence |
 | M11: speculative seed-repeat embedding | 52 | complete | exact Q8 seed-plus-mask block embedding in one GPU launch, shared by all DFlash/DDTree draft paths |
 | M12: packed KV footprint record | 53 | complete | deterministic four-format capacity records derived from the checked allocation contract |
+| M13: generic batched target verify | 54 | complete | one shared batched target verification call with reusable scratch and greedy-state parity |
 
 ## M0 evidence
 
@@ -858,5 +859,47 @@ W7900 floor they change by +5.66% and +0.14%.
 
 The conservative direction-table position is now complete through row 53 of
 2706; row 54 is next. The remaining direction count is 2653. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.
+
+## M13 evidence
+
+### Generic two-model batched verification
+
+Direction row 54 calls for low-cost candidate generation and batched target
+verification. The DFlash paths already used the shared batch verifier, but the
+generic target-plus-draft `spec_step_greedy` entry point still invoked the
+target once per candidate and downloaded one full vocabulary row after every
+call.
+
+Commit `e25078d4105867823a5c4419632cc182c5826924` routes the complete candidate
+block through one `verify_dflash_block` call. The target prediction that
+precedes the block is captured first; the batch returns the remaining greedy
+predictions, including the full-acceptance bonus. The existing pure acceptance
+planner and rollback/commit replay remain unchanged, so the committed token
+sequence and final target/draft state contract are preserved. The interactive
+runner allocates `VerifyScratch` once per session and supplies a zero-extract
+hidden ring, avoiding hidden-history allocation while satisfying the shared
+batch interface.
+
+A static audit requires the batch call, returned argmax vector, reusable
+scratch at the caller, and absence of a serial `target.forward` in the
+verification section. Its test also runs all greedy acceptance shapes and
+compiles the wired example. The full locked workspace all-target suite,
+workspace examples, clean-room audits, eleven-cell quant parity battery, four
+available standard coherence cells, four DFlash/DDTree cells, and the Qwen3.6
+27B agentic cell pass on GPU0. Manual review found coherent bounded output,
+valid tool-call JSON, and no speculative or agentic warning; the 9B standard
+reasoning cell ends at its short-mode bound while its visible reasoning is
+correct and non-repetitive.
+
+Three fresh GPU0 performance processes measure 1,295.9, 1,295.6, and 1,292.1
+prefill tok/s and 141.4, 140.7, and 140.3 decode tok/s. Their medians are
+1,295.6 and 140.7 tok/s. Relative to M12 they change by -0.09% and -0.28%, so
+the 5% cross-batch expansion rule did not fire. Relative to the committed
+W7900 floor they change by +5.57% and -0.14%.
+
+The conservative direction-table position is now complete through row 54 of
+2706; row 55 is next. The remaining direction count is 2652. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.

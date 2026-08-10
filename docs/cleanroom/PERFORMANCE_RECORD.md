@@ -1666,3 +1666,71 @@ include both K and V plus the exact F32-storage rounding used by constructors.
   pair is absent; this is not counted as passing coverage.
 - Decision: accept row 53 as a reproducible, allocation-derived context
   capacity record with full GPU0 non-regression evidence.
+
+---
+
+## M13: generic batched target verify — 2026-08-10
+
+### Run identity
+
+- Regression parent: `6f6661b29478fa40a489a7989b83a55447659799`.
+- Candidate commit: `e25078d4105867823a5c4419632cc182c5826924`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Speculative source SHA-256:
+  `6b6302c78edf20bf0217c16d42c01cf153d0b6c7184feb1fd4616f5e8883054e`.
+- Interactive runner SHA-256:
+  `659a60c3c03bdee437e559c5a7584eba0292421ab7503dad31d06556052b3746`.
+- Static audit SHA-256:
+  `9cf5c93371be26532d55f57b2f96ced60635814d47f05ce209757b5f01183267`.
+- Candidate commit diff SHA-256:
+  `3621206c21e826513e542e98a178a75fa8cf48da543c0dec6880bf34f53382e4`.
+- Final quant report md5: `bb7b53ec4b48b84d10f2ece3957494da`.
+- Final standard-coherence report md5: `637b685486575a585032c54a92283ac4`.
+- Final DFlash report md5: `85fe77d65bced9bbd24c94714332ce0c`.
+- Final agentic report md5: `f08b9267845d40cb23d066e48ab4c958`.
+- Environment: GPU0-only ROCr/HIP visibility, ROCm 7.14 library path,
+  local read-only model directory, W7900 baseline selection, explicit
+  speed-gate DPM warm-up, and per-child GPU-lock serialization.
+- Full command: `./scripts/cleanroom-integration-gate.sh --speed-runs 3
+  --out /tmp/hipfire-integration-row54` under the recorded environment.
+- Machine manifest: `/tmp/hipfire-integration-row54/summary.md`.
+
+### GPU measurements
+
+| Metric | Committed floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1295.9 | 1295.6 | 1292.1 | 1295.6 |
+| 4B MQ4 decode tok/s | 140.9 | 141.4 | 140.7 | 140.3 | 140.7 |
+
+### Decision
+
+- Generic greedy speculative verification now uses one shared batched target
+  call per candidate block instead of one target call per candidate. The
+  acceptance planner and rollback/commit replay semantics are unchanged.
+- Caller-owned verify scratch is allocated once and reused. A zero-extract
+  ring avoids allocating hidden-state history that this generic path does not
+  consume.
+- GPU medians change by +5.57% prefill and -0.14% decode versus the committed
+  W7900 floor. Relative to M12 they change by -0.09% and -0.28%, so no
+  five-run expansion was required.
+- Full locked workspace all-target tests, workspace examples, device-binding,
+  architecture, HFQ-shape, tokenizer, speculative-embedding, greedy-batched-
+  verify, KV-footprint, generation, agentic-detector, and clean-room
+  source/license audits pass.
+- Unified GPU0 quant parity passes all 11 cases. Report:
+  `/tmp/hipfire-integration-row54/quant-parity.md`.
+- Four available standard coherence cells pass after manual review. The 9B
+  reasoning sample reaches its short-mode bound while remaining correct and
+  non-repetitive; the capital answer, one-line function, and tool call are
+  complete. Report: `/tmp/hipfire-integration-row54/coherence.md`.
+- All four DFlash/DDTree cells report `ok=true` and `soft_warn=false`; prose
+  and code outputs were manually reviewed. Report:
+  `/tmp/hipfire-integration-row54/coherence-dflash.md`.
+- The Qwen3.6 27B agentic cell emits valid `name='read'` JSON with zero hard
+  failures and zero soft warnings. Report:
+  `/tmp/hipfire-integration-row54/agentic.md`.
+- PFlash remains explicitly skipped because the required local target/drafter
+  pair is absent; this is not counted as passing coverage.
+- Decision: accept row 54 as a distribution-preserving reduction of generic
+  target verification calls with full GPU0 non-regression evidence.
