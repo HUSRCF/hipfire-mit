@@ -40,6 +40,7 @@ CPU_STEPS=(
     long-context-q8-record-audit
     qwen35-long-context-capture-audit
     generation-semantics-audit
+    dflash-stop-order-audit
     agentic-detector-self-check
     cleanroom-license
 )
@@ -68,6 +69,7 @@ REQUIRED_SCRIPTS=(
     scripts/verify-long-context-q8-record.sh
     scripts/verify-qwen35-long-context-capture.sh
     scripts/verify-generation-semantics.sh
+    scripts/verify-dflash-stop-order.sh
     scripts/verify-bind-thread.sh
 )
 
@@ -221,6 +223,7 @@ execute_step() {
         long-context-q8-record-audit) ./scripts/verify-long-context-q8-record.sh ;;
         qwen35-long-context-capture-audit) ./scripts/verify-qwen35-long-context-capture.sh ;;
         generation-semantics-audit) ./scripts/verify-generation-semantics.sh ;;
+        dflash-stop-order-audit) ./scripts/verify-dflash-stop-order.sh ;;
         agentic-detector-self-check) ./scripts/agentic-gate.sh --self-check ;;
         cleanroom-license) ./scripts/cleanroom-gate.sh ;;
         quant-parity)

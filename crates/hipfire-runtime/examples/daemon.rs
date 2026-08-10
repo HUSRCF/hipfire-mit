@@ -2431,11 +2431,16 @@ fn generate_dflash(
         .fold((0u32, f32::NEG_INFINITY), |(best, bv), (i, &v)| {
             if v > bv { (i as u32, v) } else { (best, bv) }
         }).0;
+    let first_is_stop = tokenizer.is_generation_stop(
+        first_token,
+        target.config.eos_token,
+        im_end_token,
+    );
 
     let t_prefill = Instant::now();
 
     // Decode loop — spec_step_dflash returns a committed batch per cycle.
-    let mut emitted: Vec<u32> = vec![first_token];
+    let mut emitted: Vec<u32> = Vec::new();
     let mut streamed_tokens: Vec<u32> = Vec::new();
     // `bytes_fed_to_filter` is the index into the freshly-decoded byte
     // stream past which we have not yet handed bytes to the filter.
@@ -2474,18 +2479,23 @@ fn generate_dflash(
         }
     }
 
-    // Emit the first token immediately so TTFT is the prefill time.
-    streamed_tokens.push(first_token);
-    emit_committed_event(stdout, id, first_token, streamed_tokens.len() - 1, t0.elapsed().as_millis() as u64);
-    let all_bytes = tokenizer.decode_bytes(&streamed_tokens);
-    let new_bytes = &all_bytes[bytes_fed_to_filter..];
-    bytes_fed_to_filter = all_bytes.len();
-    if let FilterAction::Emit(text_bytes) = filter.observe(new_bytes) {
-        let text = std::str::from_utf8(&text_bytes).unwrap();
-        let _ = writeln!(stdout, r#"{{"type":"token","id":"{}","text":{}}}"#, id, serde_json::to_string(&text).unwrap_or_default());
-        let _ = stdout.flush();
+    // Emit the first token immediately so TTFT is the prefill time, unless it
+    // is a model/tokenizer/frame terminator. Stop tokens are control flow and
+    // must never enter either the token-event or visible-text stream.
+    if !first_is_stop {
+        emitted.push(first_token);
+        streamed_tokens.push(first_token);
+        emit_committed_event(stdout, id, first_token, streamed_tokens.len() - 1, t0.elapsed().as_millis() as u64);
+        let all_bytes = tokenizer.decode_bytes(&streamed_tokens);
+        let new_bytes = &all_bytes[bytes_fed_to_filter..];
+        bytes_fed_to_filter = all_bytes.len();
+        if let FilterAction::Emit(text_bytes) = filter.observe(new_bytes) {
+            let text = std::str::from_utf8(&text_bytes).unwrap();
+            let _ = writeln!(stdout, r#"{{"type":"token","id":"{}","text":{}}}"#, id, serde_json::to_string(&text).unwrap_or_default());
+            let _ = stdout.flush();
+        }
+        generated += 1;
     }
-    generated += 1;
 
     let mut rng_state: u64 = 0x13579BDFu64;
 
@@ -2517,7 +2527,7 @@ fn generate_dflash(
     };
 
     // Fast path exit conditions (mirrors the dflash_spec_demo outer loop).
-    while generated < max_tokens {
+    while !first_is_stop && generated < max_tokens {
         if position + df.block_size >= ctx_capacity { break; }
 
         // Dispatch: when DDTree is configured (HIPFIRE_DDTREE_BUDGET set
@@ -2593,6 +2603,10 @@ fn generate_dflash(
         let mut think_cap_hit = false;
         for &tok in &committed_tail {
             if generated >= max_tokens { break; }
+            if tokenizer.is_generation_stop(tok, target.config.eos_token, im_end_token) {
+                hit_eos = true;
+                break;
+            }
             emitted.push(tok);
             streamed_tokens.push(tok);
             emit_committed_event(stdout, id, tok, streamed_tokens.len() - 1, t0.elapsed().as_millis() as u64);
@@ -2605,7 +2619,6 @@ fn generate_dflash(
                 let _ = stdout.flush();
             }
             generated += 1;
-            if tokenizer.is_generation_stop(tok, target.config.eos_token, im_end_token) { hit_eos = true; break; }
 
             // max_think_tokens enforcement (mirrors the AR path). Track
             // <think>/<⁄think> in decoded text and count tokens inside.
