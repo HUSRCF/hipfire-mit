@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! BPE tokenizer loaded from GGUF metadata.
 //! Supports encode (text → token IDs) and decode (token IDs → text).
 
@@ -340,6 +341,21 @@ impl Tokenizer {
     #[inline]
     pub fn is_terminator(&self, id: u32) -> bool {
         id == self.eos_id || self.eot_id == Some(id)
+    }
+
+    /// True when a generated token ends the current generation contract.
+    ///
+    /// Model metadata, tokenizer metadata, and the active prompt frame can
+    /// each name a valid stop token. Keeping the union here prevents decode
+    /// entry points from accidentally accepting only one of those sources.
+    #[inline]
+    pub fn is_generation_stop(
+        &self,
+        id: u32,
+        model_eos: u32,
+        frame_stop: Option<u32>,
+    ) -> bool {
+        id == model_eos || frame_stop == Some(id) || self.is_terminator(id)
     }
 
     /// Look up a special token's ID by literal content. Returns `None`
@@ -1303,6 +1319,30 @@ mod bpe_tests {
         let tok = synth(&["a", "b"], &[]);
         assert_eq!(tok.encode_gpt2_bpe(""), Vec::<u32>::new());
         assert_eq!(tok.encode_gpt2_bpe("a"), vec![0]);
+    }
+
+    #[test]
+    fn generation_stop_unifies_model_tokenizer_and_frame_semantics() {
+        let mut tok = synth(&["ordinary"], &[]);
+        tok.eos_id = 7;
+        tok.eot_id = Some(8);
+
+        assert!(tok.is_generation_stop(7, 9, Some(10)));
+        assert!(tok.is_generation_stop(8, 9, Some(10)));
+        assert!(tok.is_generation_stop(9, 9, Some(10)));
+        assert!(tok.is_generation_stop(10, 9, Some(10)));
+        assert!(!tok.is_generation_stop(11, 9, Some(10)));
+    }
+
+    #[test]
+    fn generation_stop_allows_duplicate_and_absent_frame_tokens() {
+        let mut tok = synth(&["ordinary"], &[]);
+        tok.eos_id = 7;
+        tok.eot_id = None;
+
+        assert!(tok.is_generation_stop(7, 7, Some(7)));
+        assert!(tok.is_generation_stop(9, 9, None));
+        assert!(!tok.is_generation_stop(10, 9, None));
     }
 
     #[test]

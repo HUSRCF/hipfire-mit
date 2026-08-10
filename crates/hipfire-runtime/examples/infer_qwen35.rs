@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Qwen3.5 (DeltaNet) inference — matches ollama quality settings.
 //! Usage: infer_qwen35 <model.hfq> [--guards on|off] [prompt text...]
 //!
@@ -281,8 +282,7 @@ fn main() {
             }
         }
 
-        if next_token == config.eos_token { break; }
-        if im_end_token == Some(next_token) { break; }
+        if tokenizer.is_generation_stop(next_token, config.eos_token, im_end_token) { break; }
         if !RUNNING.load(Ordering::Relaxed) { break; }
 
         // N-gram loop detector (guards on only). When the streamed

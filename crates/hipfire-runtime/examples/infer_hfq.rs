@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Run inference on a .hfq (hipfire-quantized) model.
 //! Usage: cargo run --release --example infer_hfq <model.hfq> [flags] [prompt text...]
 //! Flags: --q8kv, --fp32kv, --givens4, --givens2, --hfq4kv, --temp T
@@ -178,7 +179,9 @@ fn main() {
         print!("{text}");
         std::io::stdout().flush().ok();
 
-        if next_token == config.eos_token || !RUNNING.load(Ordering::Relaxed) {
+        if tokenizer.is_generation_stop(next_token, config.eos_token, None)
+            || !RUNNING.load(Ordering::Relaxed)
+        {
             break;
         }
 

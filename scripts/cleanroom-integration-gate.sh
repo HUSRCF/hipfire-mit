@@ -28,6 +28,7 @@ CPU_STEPS=(
     workspace-tests
     workspace-examples
     bind-thread-audit
+    generation-semantics-audit
     agentic-detector-self-check
     cleanroom-license
 )
@@ -44,6 +45,7 @@ REQUIRED_SCRIPTS=(
     scripts/coherence-gate.sh
     scripts/quant-parity-gate.sh
     scripts/speed-gate.sh
+    scripts/verify-generation-semantics.sh
     scripts/verify-bind-thread.sh
 )
 
@@ -185,6 +187,7 @@ execute_step() {
         workspace-tests) cargo test --workspace --locked --all-targets ;;
         workspace-examples) cargo check --workspace --locked --examples ;;
         bind-thread-audit) ./scripts/verify-bind-thread.sh ;;
+        generation-semantics-audit) ./scripts/verify-generation-semantics.sh ;;
         agentic-detector-self-check) ./scripts/agentic-gate.sh --self-check ;;
         cleanroom-license) ./scripts/cleanroom-gate.sh ;;
         quant-parity)

@@ -259,8 +259,7 @@ fn main() {
             else { print!("{text}"); std::io::stdout().flush().ok(); }
         }
 
-        if next_token == text_config.eos_token { break; }
-        if im_end_token == Some(next_token) { break; }
+        if tokenizer.is_generation_stop(next_token, text_config.eos_token, im_end_token) { break; }
         if !RUNNING.load(Ordering::Relaxed) { break; }
 
         let pos = prefill_len + generated.len() - 1;

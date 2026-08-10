@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Interactive REPL for hipfire — like `ollama run`.
 //! Usage: hipfire-run <model.hfq> [--system "prompt"] [--kv givens4|givens2]
 
@@ -337,7 +338,7 @@ fn main() {
                 print!("{}", text);
                 std::io::stdout().flush().unwrap();
             }
-            tok == eos_token || im_end_token_val == Some(tok) || tokenizer.is_terminator(tok)
+            tokenizer.is_generation_stop(tok, eos_token, im_end_token_val)
         };
 
         if spec_active {

@@ -2546,7 +2546,7 @@ fn generate_dflash(
                 let _ = stdout.flush();
             }
             generated += 1;
-            if tok == target.config.eos_token || im_end_token == Some(tok) || tokenizer.is_terminator(tok) { hit_eos = true; break; }
+            if tokenizer.is_generation_stop(tok, target.config.eos_token, im_end_token) { hit_eos = true; break; }
 
             // max_think_tokens enforcement (mirrors the AR path). Track
             // <think>/<⁄think> in decoded text and count tokens inside.
@@ -2960,9 +2960,7 @@ fn generate_multi(
         }
         m.seq_pos += 1;
 
-        if next_token == config.eos_token { break; }
-        if im_end_token == Some(next_token) { break; }
-        if tokenizer.is_terminator(next_token) { break; }
+        if tokenizer.is_generation_stop(next_token, config.eos_token, im_end_token) { break; }
 
         // max_think_tokens enforcement: same decoded-text scan as pp=1.
         if max_think_tokens > 0 {
@@ -3683,9 +3681,8 @@ fn generate(m: &mut LoadedModel, gpu: &mut rdna_compute::Gpu, stdout: &mut std::
         // (which increments `generated` beyond the iteration count) can't
         // push generated past max_tokens: each loop start rechecks the cap.
         while generated < max_tokens {
-            let proposed_terminator = next_token == config.eos_token
-                || im_end_token == Some(next_token)
-                || tokenizer.is_terminator(next_token);
+            let proposed_terminator =
+                tokenizer.is_generation_stop(next_token, config.eos_token, im_end_token);
             if let Some(forced) = forced_structured_prefix.pop_front() {
                 next_token = forced;
             } else if !empty_think_recovered && proposed_terminator {
@@ -3758,9 +3755,7 @@ fn generate(m: &mut LoadedModel, gpu: &mut rdna_compute::Gpu, stdout: &mut std::
                 }
             }
 
-            if next_token == config.eos_token { break; }
-            if im_end_token == Some(next_token) { break; }
-            if tokenizer.is_terminator(next_token) { break; }
+            if tokenizer.is_generation_stop(next_token, config.eos_token, im_end_token) { break; }
 
             // max_think_tokens enforcement. Track whether we're inside an
             // open <think>...</think> block and how many tokens we've
@@ -4081,9 +4076,7 @@ fn generate(m: &mut LoadedModel, gpu: &mut rdna_compute::Gpu, stdout: &mut std::
             let pos = m.seq_pos + generated - 1;
             let (tok, rng) = llama::forward_scratch(gpu, weights, config, next_token, pos, kv, scratch, temp, top_p, rng_state, hist_slice.len(), repeat_penalty).unwrap();
 
-            if next_token == config.eos_token { break; }
-            if im_end_token == Some(next_token) { break; }
-            if tokenizer.is_terminator(next_token) { break; }
+            if tokenizer.is_generation_stop(next_token, config.eos_token, im_end_token) { break; }
 
             next_token = tok;
             rng_state = rng;
@@ -4297,9 +4290,7 @@ fn generate_vl(m: &mut LoadedModel, gpu: &mut rdna_compute::Gpu, stdout: &mut st
         let _ = writeln!(stdout, r#"{{"type":"token","id":"{}","text":{}}}"#, id, serde_json::to_string(&text).unwrap_or_default());
         let _ = stdout.flush();
 
-        if next_token == config.eos_token { break; }
-        if im_end_token == Some(next_token) { break; }
-        if tokenizer.is_terminator(next_token) { break; }
+        if tokenizer.is_generation_stop(next_token, config.eos_token, im_end_token) { break; }
 
         qwen35::forward_scratch(gpu, weights, config, next_token, m.seq_pos, kv, dn, scratch).unwrap();
         m.seq_pos += 1;
