@@ -3572,7 +3572,16 @@ impl KvCache {
         gpu: &mut Gpu, is_kv_layer: &[bool], n_kv_heads: usize, head_dim: usize,
         max_seq_len: usize,
     ) -> HipResult<Self> {
-        let physical_cap = max_seq_len;
+        Self::new_gpu_asym4_capped_filtered(
+            gpu, is_kv_layer, n_kv_heads, head_dim, max_seq_len, max_seq_len,
+        )
+    }
+
+    /// Capped variant of [`new_gpu_asym4_filtered`].
+    pub fn new_gpu_asym4_capped_filtered(
+        gpu: &mut Gpu, is_kv_layer: &[bool], n_kv_heads: usize, head_dim: usize,
+        max_seq_len: usize, physical_cap: usize,
+    ) -> HipResult<Self> {
         let layout = PackedKvLayout::new(
             PackedKvKind::Asym4, n_kv_heads, head_dim, max_seq_len, physical_cap,
         )?;
@@ -3591,7 +3600,7 @@ impl KvCache {
         let v_bph = layout.v_bytes_per_head;
         let n_kv = is_kv_layer.iter().filter(|b| **b).count();
         eprintln!(
-            "KV cache: asym4 filtered ({n_kv}/{} layers carry KV; K rotated-4b {k_bph}B + V Q8 {v_bph}B = {} B/head)",
+            "KV cache: asym4 filtered ({n_kv}/{} layers carry KV; K rotated-4b {k_bph}B + V Q8 {v_bph}B = {} B/head, physical_cap={physical_cap} / max_seq={max_seq_len})",
             is_kv_layer.len(),
             k_bph + v_bph,
         );
@@ -3903,7 +3912,16 @@ impl KvCache {
         gpu: &mut Gpu, is_kv_layer: &[bool], n_kv_heads: usize, head_dim: usize,
         max_seq_len: usize,
     ) -> HipResult<Self> {
-        let physical_cap = max_seq_len;
+        Self::new_gpu_asym2_capped_filtered(
+            gpu, is_kv_layer, n_kv_heads, head_dim, max_seq_len, max_seq_len,
+        )
+    }
+
+    /// Capped variant of [`new_gpu_asym2_filtered`].
+    pub fn new_gpu_asym2_capped_filtered(
+        gpu: &mut Gpu, is_kv_layer: &[bool], n_kv_heads: usize, head_dim: usize,
+        max_seq_len: usize, physical_cap: usize,
+    ) -> HipResult<Self> {
         let layout = PackedKvLayout::new(
             PackedKvKind::Asym2, n_kv_heads, head_dim, max_seq_len, physical_cap,
         )?;
@@ -3922,7 +3940,7 @@ impl KvCache {
         let v_bph = layout.v_bytes_per_head;
         let n_kv = is_kv_layer.iter().filter(|b| **b).count();
         eprintln!(
-            "KV cache: asym2 filtered ({n_kv}/{} layers carry KV; K rotated-2b {k_bph}B + V Q8 {v_bph}B = {} B/head)",
+            "KV cache: asym2 filtered ({n_kv}/{} layers carry KV; K rotated-2b {k_bph}B + V Q8 {v_bph}B = {} B/head, physical_cap={physical_cap} / max_seq={max_seq_len})",
             is_kv_layer.len(),
             k_bph + v_bph,
         );
@@ -5123,12 +5141,26 @@ mod tests {
         assert_eq!(q8.filtered_allocated_bytes, 71_303_552);
         assert_eq!(q8.saved_bytes, 213_909_120);
 
+        let asym2 = hybrid_packed_kv_footprint(
+            PackedKvFormat::Asym2, 64, 16, 4, 256, 65_536, 2048,
+        ).unwrap();
+        assert_eq!(asym2.all_layer_allocated_bytes, 178_257_920);
+        assert_eq!(asym2.filtered_allocated_bytes, 44_564_864);
+        assert_eq!(asym2.saved_bytes, 133_693_056);
+
         let asym3 = hybrid_packed_kv_footprint(
             PackedKvFormat::Asym3, 64, 16, 4, 256, 65_536, 2048,
         ).unwrap();
         assert_eq!(asym3.all_layer_allocated_bytes, 195_035_136);
         assert_eq!(asym3.filtered_allocated_bytes, 48_759_168);
         assert_eq!(asym3.saved_bytes, 146_275_968);
+
+        let asym4 = hybrid_packed_kv_footprint(
+            PackedKvFormat::Asym4, 64, 16, 4, 256, 65_536, 2048,
+        ).unwrap();
+        assert_eq!(asym4.all_layer_allocated_bytes, 211_812_352);
+        assert_eq!(asym4.filtered_allocated_bytes, 52_953_472);
+        assert_eq!(asym4.saved_bytes, 158_858_880);
     }
 
     #[test]
