@@ -1201,3 +1201,73 @@ tok/s.
 - Decision: accept row 47 as a checked multimodal-input boundary shared by all
   current VL frontends, with the model-dependent GPU vision smoke still open
   until a compatible VL model is available.
+
+---
+
+## M7: unified generation-stop semantics — 2026-08-10
+
+### Run identity
+
+- Regression parent: `4a908c68329b0943604e989ff6b00a76b2ee8a91`.
+- Candidate commit: `9c794f3743d2fb78b1f127e54dcff8bcb57b9b5d`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Tokenizer contract SHA-256:
+  `c5467624cfd040f0256dfdc26c4376679a89f08e5cedfcc089f246241fa02d22`.
+- Generation-semantics audit SHA-256:
+  `899508287d3d91ba84c26fe7e53f3029354ca914c4668d3970b81e8896c61eaa`.
+- Candidate commit diff SHA-256:
+  `89e3ae50cae822fa13a23f4b7348bc2a14a0f8ae57ee2d2d4169056feea387a2`.
+- Candidate benchmark md5: `a9a5fe0b2c8b6e68a477bca6fc60d791`.
+- Candidate daemon md5: `b55207eb8f080a9c213d700633b573ae`.
+- Candidate DFlash md5: `f5f44dfe14f3c142b7716e8b05566d5f`.
+- Environment: GPU0-only ROCr/HIP visibility, ROCm 7.14 library path,
+  local read-only model directory, W7900 baseline selection, explicit
+  speed-gate DPM warm-up, and per-child GPU-lock serialization.
+- Full command: `./scripts/cleanroom-integration-gate.sh --speed-runs 3
+  --out /tmp/hipfire-integration-row48` under the recorded environment.
+- Machine manifest: `/tmp/hipfire-integration-row48/summary.md`.
+
+### Measurements
+
+| Metric | Committed floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1300.3 | 1302.2 | 1282.5 | 1300.3 |
+| 4B MQ4 decode tok/s | 140.9 | 140.9 | 140.5 | 140.3 | 140.5 |
+
+The commit-hook repetition passes at 1313.8 prefill tok/s and 141.5 decode
+tok/s.
+
+### Decision
+
+- Candidate median deltas are +5.95% prefill and -0.28% decode versus the
+  committed floor. Every observation passes the 5% regression tolerance.
+  Relative to M6 medians the changes are +1.92% and -0.35%, so no two-run
+  expansion was required. The inlined stop union is outside GPU compute hot
+  paths; no performance improvement is attributed.
+- Two generation-stop unit tests pass and cover model EOS, tokenizer EOS,
+  auxiliary EOT, active frame stop, duplicate identifiers, absent frame stop,
+  and an unrelated token. The static audit passes for all seven user-facing
+  decode entry points and is included in the integration manifest.
+- Full locked workspace all-target tests, workspace examples, device-binding
+  audits, agentic detector self-check, and clean-room source/license gate pass.
+- Unified GPU0 quant parity passes all ten cases. Report:
+  `/tmp/hipfire-integration-row48/quant-parity.md`.
+- Four available standard coherence cells pass after manual review. The 9B
+  reasoning sample ends at the short-mode generation bound; all emitted text
+  is on-topic and no terminator attracts further output. Reports:
+  `/tmp/hipfire-integration-row48/coherence.md` and hook repetition
+  `/tmp/coherence-20260810-114200.md`.
+- All four DFlash/DDTree cells report `ok=true` and `soft_warn=false`; prose
+  and code outputs were manually reviewed. Reports:
+  `/tmp/hipfire-integration-row48/coherence-dflash.md` and hook repetition
+  `/tmp/coherence-dflash-20260810-114224.md`.
+- The Qwen3.6 27B agentic cell emits valid `name='read'` JSON with zero hard
+  failures and zero soft warnings. Reports:
+  `/tmp/hipfire-integration-row48/agentic.md` and hook repetition
+  `/tmp/agentic-gate-20260810-114247.md`.
+- PFlash remains explicitly skipped because the required local target/drafter
+  pair is absent; this is not counted as passing coverage.
+- Decision: accept row 48 as a single generation-stop contract shared by all
+  current user-facing decode paths, with persistent static coverage against
+  future entry-point drift.

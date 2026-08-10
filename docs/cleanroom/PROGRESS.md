@@ -580,3 +580,45 @@ The conservative direction-table position is now complete through row 47 of
 2706; row 48 is next. Direction rows are audit inputs and are aggregated into
 independently specified implementation batches, so the remaining 2659 rows
 are not a promise of 2659 one-to-one Git commits.
+
+## M7 evidence
+
+### Unified generation-stop semantics
+
+Direction row 48 requires prompt encoding, templates, sampling, and stopping
+to preserve the model's input/output semantics. The permitted snapshot already
+centralized prompt framing and sampling policy, but its decode loops had
+drifted: the tokenizer defined both its primary EOS and an auxiliary EOT as
+terminators, while several user-facing entry points compared only model EOS
+and, in some cases, a ChatML frame stop. A raw-text generation that emitted
+the auxiliary EOT could therefore continue into a post-terminator attractor
+loop depending on the selected frontend.
+
+Commit `9c794f3743d2fb78b1f127e54dcff8bcb57b9b5d` adds one pure
+`is_generation_stop` contract that takes the union of model metadata,
+tokenizer EOS/EOT metadata, and the active frame stop. The daemon, interactive
+runner, text and vision inference paths, and the Qwen3, Qwen3.5, and HFQ
+frontends all use that contract. Two unit tests cover every stop source,
+unrelated tokens, absent frame stops, and duplicate identifiers. A new static
+audit covers all seven user-facing entry points and is now part of every
+clean-room integration run, preventing a future bare-EOS regression.
+
+The full locked workspace all-target suite, all workspace examples, binding
+audits, MIT gate, ten-cell quantization parity battery, four available
+standard coherence cells, all four DFlash/DDTree cells, and the Qwen3.6 27B
+agentic cell pass on GPU0. Manual review found coherent bounded outputs, no
+special-token corruption or attractor loop, `ok=true`/`soft_warn=false` for
+every speculative cell, and valid tool-call JSON with zero warnings.
+
+Three fresh performance processes measure 1300.3, 1302.2, and 1282.5 prefill
+tok/s and 140.9, 140.5, and 140.3 decode tok/s. Their medians are 1300.3 and
+140.5 tok/s, respectively +5.95% and -0.28% versus the committed W7900 floor.
+Relative to M6 the median changes are +1.92% and -0.35%, so the 5% cross-batch
+expansion rule did not fire. The commit-hook repetition measured 1313.8 and
+141.5 tok/s. This change replaces existing stop comparisons with an inlined
+constant-time union and claims semantic consistency, not a speedup.
+
+The conservative direction-table position is now complete through row 48 of
+2706; row 49 is next. The remaining direction count is 2658. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.
