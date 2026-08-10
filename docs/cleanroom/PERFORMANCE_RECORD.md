@@ -2065,3 +2065,44 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
   hard failures and zero soft warnings.
 - Decision: accept row 60 as a cold-path model-adapter correctness fix with
   full MIT-boundary and performance non-regression evidence.
+
+---
+
+## M20: adapter-owned protocol labels — 2026-08-11
+
+### Run identity
+
+- Regression parent: `5f980c53415a125271348256c012e21cc50e6e5c`.
+- Candidate commit: `de39757`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Architecture contract SHA-256: `33fadcde8fc1ae0c7e8feb4ab083c668cc161ccb3396bf34592925a4c15bdc83`.
+- Qwen3.5 adapter SHA-256: `f479d4819cfa32abfa828fbd7b1dfb4a636f5b8f84092755eff2e18f66b6634f`.
+- LLaMA adapter SHA-256: `15f99d428ffc84f7b9a279b618b1f75189a214de728bf9b3b7d47317cad77711`.
+- Daemon SHA-256: `fb527369bb5ac0d056d72f49f5a00be4ccb807cc014a4c11aa1ff28c92711d29`.
+- Adapter audit SHA-256: `8970a5247548ee6c1bd01caec22027fd030f58a4d088a9bb9eaf72630fdc8edd`.
+- Candidate diff SHA-256: `76c12e389ee310cd2768dfe1354c2f9b399f481272608201ed56150f24c41c45`.
+- Reports md5: quant `5fe644ec5e1c1952e46ae150b802ffd8`, standard
+  `e99edee1834e538493d3fdabb6366dfc`, DFlash
+  `e495b59d4bed88cf4b15ac20417024f5`, agentic
+  `1399986b8fec2fa84a5fb0efd74e094e`.
+- Full gate: `/tmp/hipfire-integration-row61/summary.md`.
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1301.5 | 1270.5 | 1314.5 | 1301.5 |
+| 4B MQ4 decode tok/s | 140.9 | 141.2 | 140.8 | 140.3 | 140.8 |
+
+### Decision
+
+- Protocol variant naming is owned by family adapters and unsupported IDs
+  return no label; the daemon preserves all existing wire values.
+- Full CPU and GPU0 gates pass. Normal medians change -0.64%/+0.36% from M19
+  and remain +6.05%/-0.07% versus the committed floor.
+- Generated outputs were manually reviewed; standard and DFlash/DDTree output
+  is coherent, all speculative detectors are clean, and agentic reports zero
+  hard failures and zero soft warnings.
+- Decision: accept row 61 as a model-adapter capability extension with full
+  protocol-compatibility, MIT-boundary, and performance evidence.

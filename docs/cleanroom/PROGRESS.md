@@ -1104,3 +1104,27 @@ The conservative direction-table position is now complete through row 60 of
 2706; row 61 is next. The remaining direction count is 2646. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M20 evidence
+
+### Adapter-owned protocol labels
+
+Direction row 61 expands the model-adapter boundary. Commit `de39757` adds a
+fail-closed `protocol_label` hook to the shared architecture contract and
+moves dense/MoE Qwen3.5 and LLaMA/plain-Qwen label ownership into their
+adapters. The daemon now performs only generic adapter selection and no longer
+duplicates the `arch_id = 6` variant rule. Unit tests pin every existing label
+and the unknown-ID result, so this refactor preserves the wire protocol.
+
+The full workspace, MIT checks, eleven-cell quant parity, standard coherence,
+four DFlash/DDTree cells, and Qwen3.6 27B agentic cell pass on GPU0. Manual
+review found coherent output, clean speculative detectors, valid tool-call
+JSON, and zero agentic warnings. Three fresh performance processes measure
+1,301.5, 1,270.5, and 1,314.5 prefill tok/s and 141.2, 140.8, and 140.3 decode
+tok/s. Medians are 1,301.5 and 140.8 tok/s, changing by -0.64% and +0.36%
+from M19, so no five-run expansion was required.
+
+The conservative direction-table position is now complete through row 61 of
+2706; row 62 is next. The remaining direction count is 2645. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.
