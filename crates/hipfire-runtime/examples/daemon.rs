@@ -131,6 +131,13 @@ fn pp_dflash_requires_single_gpu(pp: usize, has_draft: bool) -> bool {
     pp > 1 && has_draft
 }
 
+/// PFlash owns a single-device drafter and has no validated resource or
+/// execution contract with a pipeline-parallel target. Keep the stable load
+/// boundary closed until that combined path has end-to-end parity coverage.
+fn pp_pflash_requires_single_gpu(pp: usize, has_drafter: bool, mode: &str) -> bool {
+    pp > 1 && (has_drafter || mode != "off")
+}
+
 #[cfg(test)]
 mod adapter_family_tests {
     use super::*;
@@ -164,6 +171,15 @@ mod adapter_family_tests {
         assert!(!pp_dflash_requires_single_gpu(2, false));
         assert!(pp_dflash_requires_single_gpu(2, true));
         assert!(pp_dflash_requires_single_gpu(8, true));
+    }
+
+    #[test]
+    fn pipeline_parallel_pflash_fails_closed() {
+        assert!(!pp_pflash_requires_single_gpu(1, true, "always"));
+        assert!(!pp_pflash_requires_single_gpu(2, false, "off"));
+        assert!(pp_pflash_requires_single_gpu(2, true, "off"));
+        assert!(pp_pflash_requires_single_gpu(2, false, "auto"));
+        assert!(pp_pflash_requires_single_gpu(8, true, "always"));
     }
 }
 
@@ -731,10 +747,12 @@ fn main() {
                         let _ = stdout.flush();
                         continue;
                     }
-                    if (pflash_drafter.is_some() || pflash_mode_str != "off")
-                        && std::env::var("HIPFIRE_PP_PFLASH").ok().as_deref() != Some("1")
-                    {
-                        let _ = writeln!(stdout, r#"{{"type":"error","message":"PFlash prefill compression requires pp=1 in v1 (set HIPFIRE_PP_PFLASH=1 to opt into the experimental pp>1 PoC); see issue #58 v1.1 roadmap"}}"#);
+                    if pp_pflash_requires_single_gpu(
+                        pp,
+                        pflash_drafter.is_some(),
+                        &pflash_mode_str,
+                    ) {
+                        let _ = writeln!(stdout, r#"{{"type":"error","message":"PFlash prefill compression requires pp=1; pipeline-parallel PFlash has no validated resource and parity contract"}}"#);
                         let _ = stdout.flush();
                         continue;
                     }

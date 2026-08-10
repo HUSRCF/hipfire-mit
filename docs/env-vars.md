@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: MIT -->
 # hipfire environment variables — canonical reference
 
 **Generated:** 2026-05-07. Auto-extracted from source via `git ls-files | grep -E '\.(rs|ts)$'`. See `Maintenance` at the bottom for re-generation.
@@ -8,7 +9,7 @@ This document is the single canonical reference for every environment variable h
 
 | Layer | Count | Notes |
 |---|---|---|
-| `HIPFIRE_*` env vars | 118 | 14 plumbed through TUI, 45 mentioned in some doc, 59 silent |
+| `HIPFIRE_*` env vars | 117 | 14 plumbed through TUI, 44 mentioned in some doc, 59 silent |
 | Non-`HIPFIRE_*` project env vars | 21 | Test/example/diag scaffolding. Should be renamed `HIPFIRE_*` for consistency. |
 | `config.json` schema (`HipfireConfig`) | ~40 keys | Validated by `validateConfigValue()` in `cli/index.ts`. Some keys map 1:1 to env vars set at daemon spawn. |
 | `per_model_config.json` overrides | same surface | Sparse overrides on top of the base config, applied per model tag. |
@@ -126,7 +127,6 @@ Categories are best-effort, derived from naming + source location. See the categ
 | `HIPFIRE_PFLASH_SCORE_LAYER` | LIB | — | `crates/hipfire-arch-qwen35/src/pflash.rs:676` |
 | `HIPFIRE_PP_LAYERS` | MULTI-GPU | — | `crates/hipfire-runtime/examples/daemon.rs:1461` |
 | `HIPFIRE_PP_PARITY_MODEL` | MULTI-GPU | — | `crates/hipfire-arch-qwen35/tests/pp_parity.rs:163` |
-| `HIPFIRE_PP_PFLASH` | MULTI-GPU | "" (set to "1" to enable) | `crates/hipfire-runtime/examples/daemon.rs:604` |
 | `HIPFIRE_PREFILL_ALPHA` | PFLASH | — | `crates/hipfire-arch-qwen35/src/pflash.rs:114` |
 | `HIPFIRE_PREFILL_BATCHED` | PFLASH | — | `crates/hipfire-arch-qwen35/src/qwen35.rs:3509` |
 | `HIPFIRE_PREFILL_BLOCK` | PFLASH | — | `crates/hipfire-arch-qwen35/src/pflash.rs:130` |
@@ -218,13 +218,12 @@ Hot-path kernel choice levers. **All silent today.** Power users who tune for sp
 - `HIPFIRE_ROCBLAS_ALL_ARCHS`, `HIPFIRE_ROCBLAS_MIN_BATCH`, `HIPFIRE_ROCBLAS_OFF` — rocBLAS dispatch gates.
 - `HIPFIRE_WO_MMQ`, `HIPFIRE_WO_WMMA_VARIANT` — workaround flags for specific arch quirks.
 
-### `MULTI-GPU` (6)
+### `MULTI-GPU` (5)
 
 Pipeline-parallel and multi-device orchestration. Tied to `crates/hipfire-runtime/src/multi_gpu.rs` + Stage 7 of issue #58.
 
 - `HIPFIRE_DEVICES` — explicit device selection (alternate to `ROCR_VISIBLE_DEVICES`).
 - `HIPFIRE_PP_LAYERS="a,b,..."` — explicit asymmetric layer split (PR #190).
-- `HIPFIRE_PP_PFLASH=1` — opt into experimental PFlash + pp>1 compose (PR #190).
 - `HIPFIRE_HAVE_2_GPU=1` — pp_parity test gate; required for the 2-GPU parity battery.
 - `HIPFIRE_PP_PARITY_MODEL` — model path override for the pp_parity test.
 - `HIPFIRE_UNIFORM_VRAM_TOLERANCE_GB` — VRAM-tolerance threshold above which mixed-arch warning fires under `HIPFIRE_ALLOW_MIXED_ARCH=1`.
@@ -491,7 +490,7 @@ User-facing knobs that should appear in the daemon TUI config flow:
 - `HIPFIRE_DETERMINISTIC` — byte-exact mode toggle
 - `HIPFIRE_DPM_WARMUP_SECS` — bench-relevant warmup seconds
 - `HIPFIRE_PREFILL_*` cluster — already in TUI partially
-- `HIPFIRE_PP_LAYERS`, `HIPFIRE_PP_PFLASH` — multi-GPU operator knobs
+- `HIPFIRE_PP_LAYERS` — multi-GPU operator knob
 - `HIPFIRE_FORCE_A3B_EVICTION` — already TUI
 
 ### Document-only (~30-40)

@@ -33,6 +33,7 @@ CPU_STEPS=(
     hfq-consumer-shape-audit
     vision-bf16-contract-audit
     pp-dflash-convergence-audit
+    pp-pflash-convergence-audit
     tokenizer-special-scan-audit
     speculative-embedding-audit
     greedy-batched-verify-audit
@@ -64,6 +65,7 @@ REQUIRED_SCRIPTS=(
     scripts/verify-hfq-consumer-shapes.sh
     scripts/verify-vision-bf16-contract.sh
     scripts/verify-pp-dflash-convergence.sh
+    scripts/verify-pp-pflash-convergence.sh
     scripts/verify-tokenizer-special-scan.sh
     scripts/verify-speculative-embedding.sh
     scripts/verify-greedy-batched-verify.sh
@@ -220,6 +222,7 @@ execute_step() {
         hfq-consumer-shape-audit) ./scripts/verify-hfq-consumer-shapes.sh ;;
         vision-bf16-contract-audit) ./scripts/verify-vision-bf16-contract.sh ;;
         pp-dflash-convergence-audit) ./scripts/verify-pp-dflash-convergence.sh ;;
+        pp-pflash-convergence-audit) ./scripts/verify-pp-pflash-convergence.sh ;;
         tokenizer-special-scan-audit) ./scripts/verify-tokenizer-special-scan.sh ;;
         speculative-embedding-audit) ./scripts/verify-speculative-embedding.sh ;;
         greedy-batched-verify-audit) ./scripts/verify-greedy-batched-verify.sh ;;
