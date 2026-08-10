@@ -1869,3 +1869,54 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
   pair is absent; this is not counted as passing coverage.
 - Decision: accept row 56 as a reproducible, checked record of the hybrid KV
   capacity reduction with full GPU0 non-regression evidence.
+
+---
+
+## M16: long-context Q8 position reuse — 2026-08-11
+
+### Run identity
+
+- Regression parent: `8f07fcc07bff2e7ff3852a81dd230e691d8d87f8`.
+- Candidate commit: `3a0061382891085135b138b6f7fb554b9224bf69`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Plain runtime SHA-256: `38381df4fc1a20fd15e0d6de2815f42179e05fc5f2869bcc6e45fad0639231a2`.
+- Qwen3.5 runtime SHA-256: `6ae6867fc56980dd069444d575ec778f48e9cd07d9ea12330d04e19fe9288955`.
+- Static audit SHA-256: `bd4bf325b2c97a46bf07e72c5cb6a07fbac7d1a53ea903f8a966aee539ad8058`.
+- Candidate diff SHA-256: `6c3640e77a70a0893ba4bd058d8fb6ca9927c63778f7b2fd8faa466e98e54810`.
+- Reports md5: quant `14ad19416b7e4440fbd3ac097d94794b`, standard
+  `e17796316eed7ea8256b40c0673b5b8f`, DFlash
+  `22ba23a1faa5de218b85fd7de927ca6b`, agentic
+  `8cdd291842583283db81fb8db6e290ac`.
+- Full gate: `/tmp/hipfire-integration-row57/summary.md`.
+
+### Long-context probe
+
+| Item | Result |
+|---|---:|
+| Q8 prefill length | 15,001 tokens |
+| Prefill wall time | 4,519.2 ms |
+| Captured HIP graph blobs | 338 |
+| Reference attention at seq 15,006 | 929.7 us |
+| Flash attention at seq 15,006 | 166.3 us |
+| Flash speedup | 5.59x |
+| Maximum absolute delta | 5.25e-6 |
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1266.5 | 1285.7 | 1286.1 | 1285.7 |
+| 4B MQ4 decode tok/s | 140.9 | 140.4 | 140.1 | 139.9 | 140.1 |
+
+### Decision
+
+- Three long-context fallbacks reuse the previously uploaded device position
+  array; no loop-local allocation or H2D position copy remains.
+- The specialized >15K GPU0 probe establishes numerical continuity and graph
+  capture, while the normal three-run medians change only -0.15%/-0.36% from
+  M15 and remain +4.76%/-0.57% versus the committed floor.
+- All available full GPU0 gates pass. Manual review found coherent bounded
+  output; all DFlash/DDTree detectors are clean and agentic has zero warnings.
+- Decision: accept row 57 as a measured context-movement reduction with full
+  MIT-boundary and GPU0 non-regression evidence.

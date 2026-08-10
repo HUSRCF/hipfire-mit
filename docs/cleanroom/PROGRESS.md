@@ -984,3 +984,34 @@ The conservative direction-table position is now complete through row 56 of
 2706; row 57 is next. The remaining direction count is 2650. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M16 evidence
+
+### Uploaded-position reuse for long-context Q8
+
+Direction row 57 explores reduced context-path movement. Commit `3a00613`
+removes three loop-local four-byte allocations and per-row host-to-device
+position uploads from the Q8 prefill fallback above 15,000 tokens. Plain
+LLaMA and both Qwen3.5 FullAttention branches now pass one-element,
+non-owning views into the batch position array that was already uploaded.
+The position bits, sequence lengths, Q/K/V buffers, and flash kernels remain
+unchanged. With the capture-illegal operations gone, the plain path no longer
+rejects long-context Q8 graph capture.
+
+A GPU0 0.8B Q8-cache probe forced the path with 15,001 input tokens. Prefill
+completed in 4,519.2 ms and the subsequent decode captured 338 HIP graph
+blobs. At sequence length 15,006, flash attention measured 166.3 us versus
+929.7 us for the reference kernel (5.59x), with maximum absolute output delta
+`5.25e-6`. A static audit pins all three device views and rejects recurrence
+of the temporary buffer or stale capture guard.
+
+The complete workspace, audits, eleven-cell quant parity, standard coherence,
+DFlash/DDTree, and agentic gates pass on GPU0. Three fresh performance
+processes measure 1,266.5, 1,285.7, and 1,286.1 prefill tok/s and 140.4, 140.1,
+and 139.9 decode tok/s. Medians are 1,285.7 and 140.1 tok/s, changing by
+-0.15% and -0.36% from M15; the 5% expansion rule did not fire.
+
+The conservative direction-table position is now complete through row 57 of
+2706; row 58 is next. The remaining direction count is 2649. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.
