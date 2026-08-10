@@ -1128,3 +1128,33 @@ The conservative direction-table position is now complete through row 61 of
 2706; row 62 is next. The remaining direction count is 2645. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M21 evidence
+
+### Stop-before-emit speculative generation
+
+Direction row 62 fixes user-visible generation semantics. Commit `52b5934`
+makes the daemon's DFlash/DDTree path classify the prefill result and every
+batched committed token with the shared model/tokenizer/frame stop contract
+before adding it to token events or decoded text. A terminating first token
+also bypasses the speculative loop. EOS, auxiliary EOT, and ChatML frame-stop
+tokens therefore remain control flow rather than leaking into the user stream.
+A static audit pins both ordering points and the first-token loop guard.
+
+The full workspace, MIT checks, eleven-cell quant parity, standard coherence,
+four DFlash/DDTree cells, and Qwen3.6 27B agentic cell pass on GPU0. Manual
+review found coherent bounded output, clean speculative detectors, valid
+tool-call JSON, and zero agentic warnings.
+
+The first three fresh performance processes measured 1,394.6, 1,374.9, and
+1,302.8 prefill tok/s, whose median differed by more than 5% from M20. Per the
+cross-batch rule, two more independent GPU0 processes were run and measured
+1,286.3 and 1,275.3 tok/s. The five-run prefill median is 1,302.8 tok/s.
+Decode observations are 141.0, 140.8, 140.5, 140.1, and 140.2 tok/s, with a
+140.5 tok/s median. Relative to M20 the final medians change only +0.10% and
+-0.21%.
+
+The conservative direction-table position is now complete through row 62 of
+2706; row 63 is next. The remaining direction count is 2644. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.

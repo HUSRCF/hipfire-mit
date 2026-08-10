@@ -2106,3 +2106,43 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
   hard failures and zero soft warnings.
 - Decision: accept row 61 as a model-adapter capability extension with full
   protocol-compatibility, MIT-boundary, and performance evidence.
+
+---
+
+## M21: stop-before-emit speculative generation — 2026-08-11
+
+### Run identity
+
+- Regression parent: `3ecf73cccecb4430d54e6ec5511a49ce6268cd44`.
+- Candidate commit: `52b59340c0ace4c2f005d147e9be684480eb6d1b`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Daemon SHA-256: `48a4249d726a612652e579ed49c160bf7f291653cfde666442c017d50421a34e`.
+- Stop-order audit SHA-256: `3fe0398723dca9554c46e2dc1c365d362158e23f01aeaf02660ef9f9a4735f03`.
+- Candidate diff SHA-256: `aacfcd216b8430c1148c1f821213069428c700a49f5f7dbbde777727dc4c7b8e`.
+- Reports md5: quant `ebcc7cd5d9c0410b9e3c7fc9bf04d09f`, standard
+  `a6fe19e9ceaf1b204eb98505340908cc`, DFlash
+  `d6373bfbcbd1ae931255b94d06b7646e`, agentic
+  `df297126ce5cd977e8a73682645f3b88`.
+- Full gate: `/tmp/hipfire-integration-row62/summary.md`; two additional
+  `speed-gate.sh --fast` processes supplied observations four and five.
+
+### Standard GPU measurements
+
+| Metric | Floor | Obs. 1 | Obs. 2 | Obs. 3 | Obs. 4 | Obs. 5 | Median |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1394.6 | 1374.9 | 1302.8 | 1286.3 | 1275.3 | 1302.8 |
+| 4B MQ4 decode tok/s | 140.9 | 141.0 | 140.8 | 140.5 | 140.1 | 140.2 | 140.5 |
+
+### Decision
+
+- DFlash/DDTree first and batched stop tokens are classified before token
+  events or decoded output; a terminating first token skips speculation.
+- Full CPU and GPU0 gates pass. The initial >5% cross-batch prefill change
+  triggered five runs; final medians change +0.10%/-0.21% from M20 and remain
+  +6.15%/-0.28% versus the committed floor.
+- Generated outputs were manually reviewed; standard and DFlash/DDTree output
+  is coherent, all speculative detectors are clean, and agentic reports zero
+  hard failures and zero soft warnings.
+- Decision: accept row 62 as a generation-semantics correction with full
+  MIT-boundary, speculative-quality, and performance evidence.
