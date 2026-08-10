@@ -199,6 +199,9 @@ pub fn config_from_hfq(hfq: &HfqFile) -> Option<Qwen35Config> {
     let moe_intermediate_size = tc.get("moe_intermediate_size").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     let shared_expert_intermediate_size = tc.get("shared_expert_intermediate_size").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     let has_shared_expert = shared_expert_intermediate_size > 0;
+    if !crate::arch::variant_matches_config(hfq.arch_id, num_experts > 0) {
+        return None;
+    }
     // Qwen convention: re-normalize top-K routing weights to sum to 1.
     // Absent from some configs (including the shipped A3B HFQ); default on
     // for Qwen3.5-MoE / A3B to match the HF reference.

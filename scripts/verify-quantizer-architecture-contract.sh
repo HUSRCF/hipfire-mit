@@ -23,5 +23,9 @@ if ! rg -Fq "unsupported model architecture 'gemma4'" "$source_file"; then
     echo "quantizer architecture audit: unknown-family fail-closed test is missing" >&2
     exit 1
 fi
+if ! rg -Fq 'from_source_name("mistral")' "$source_file"; then
+    echo "quantizer architecture audit: explicit Mistral family coverage is missing" >&2
+    exit 1
+fi
 
 echo "quantizer architecture audit: PASS (GGUF + Safetensors share fail-closed mapping)"

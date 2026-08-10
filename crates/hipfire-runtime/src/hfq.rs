@@ -738,11 +738,10 @@ pub fn config_from_hfq(hfq: &HfqFile) -> Option<LlamaConfig> {
     let config = meta.get("config")?;
 
     let arch_str = config.get("model_type")?.as_str()?;
-    let arch = match arch_str {
-        "llama" => ModelArch::Llama,
-        "qwen3" | "qwen2" => ModelArch::Qwen3,
-        _ => ModelArch::Llama,
-    };
+    let arch = ModelArch::from_model_type(arch_str)?;
+    if !arch.matches_hfq_arch_id(hfq.arch_id) {
+        return None;
+    }
 
     let dim = config.get("hidden_size")?.as_u64()? as usize;
     let n_layers = config.get("num_hidden_layers")?.as_u64()? as usize;

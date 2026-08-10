@@ -15,6 +15,25 @@ pub enum ModelArch {
     Qwen3,
 }
 
+impl ModelArch {
+    /// Resolve only model types implemented by the shared dense-transformer
+    /// path. Mistral intentionally shares the LLaMA implementation, while
+    /// Qwen2 and Qwen3 share the Qwen-specific normalization behavior.
+    pub fn from_model_type(model_type: &str) -> Option<Self> {
+        match model_type {
+            "llama" | "mistral" => Some(Self::Llama),
+            "qwen2" | "qwen3" => Some(Self::Qwen3),
+            _ => None,
+        }
+    }
+
+    /// Check that HFQ header routing agrees with the metadata model type.
+    /// This prevents a valid metadata blob from selecting the wrong adapter.
+    pub fn matches_hfq_arch_id(self, arch_id: u32) -> bool {
+        matches!((self, arch_id), (Self::Llama, 0) | (Self::Qwen3, 1))
+    }
+}
+
 /// Model configuration, read from GGUF metadata.
 /// Supports LLaMA-family and Qwen3 architectures.
 #[derive(Debug, Clone)]
@@ -39,15 +58,11 @@ impl LlamaConfig {
     pub fn from_gguf(gguf: &GgufFile) -> Option<Self> {
         let arch_str = gguf.meta_str("general.architecture")?;
 
-        // Determine architecture and metadata prefix
-        let (arch, prefix) = match arch_str {
-            "llama" => (ModelArch::Llama, "llama"),
-            "qwen3" => (ModelArch::Qwen3, "qwen3"),
-            other => {
-                eprintln!("Warning: unknown architecture '{other}', attempting LLaMA-compatible");
-                (ModelArch::Llama, other)
-            }
-        };
+        // GGUF uses the architecture name as its metadata-key prefix. Resolve
+        // only families implemented by this path; unknown layouts must not be
+        // interpreted as LLaMA merely because their scalar keys look similar.
+        let arch = ModelArch::from_model_type(arch_str)?;
+        let prefix = arch_str;
 
         let dim = gguf.meta_u32(&format!("{prefix}.embedding_length"))? as usize;
         let n_layers = gguf.meta_u32(&format!("{prefix}.block_count"))? as usize;
@@ -4978,6 +4993,24 @@ fn simple_rand() -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_arch_contract_covers_dense_family_aliases() {
+        assert_eq!(ModelArch::from_model_type("llama"), Some(ModelArch::Llama));
+        assert_eq!(ModelArch::from_model_type("mistral"), Some(ModelArch::Llama));
+        assert_eq!(ModelArch::from_model_type("qwen2"), Some(ModelArch::Qwen3));
+        assert_eq!(ModelArch::from_model_type("qwen3"), Some(ModelArch::Qwen3));
+        assert!(ModelArch::Llama.matches_hfq_arch_id(0));
+        assert!(ModelArch::Qwen3.matches_hfq_arch_id(1));
+    }
+
+    #[test]
+    fn model_arch_contract_rejects_unknown_or_mismatched_families() {
+        assert_eq!(ModelArch::from_model_type("gemma4"), None);
+        assert!(!ModelArch::Llama.matches_hfq_arch_id(1));
+        assert!(!ModelArch::Qwen3.matches_hfq_arch_id(0));
+        assert!(!ModelArch::Qwen3.matches_hfq_arch_id(0xFF));
+    }
 
     #[test]
     fn packed_kv_q8_layout_matches_kernel_stride() {

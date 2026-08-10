@@ -106,7 +106,7 @@ struct HfqArchitecture {
 impl HfqArchitecture {
     fn from_source_name(name: &str) -> Result<Self, String> {
         match name {
-            "llama" => Ok(Self { id: 0, is_moe: false }),
+            "llama" | "mistral" => Ok(Self { id: 0, is_moe: false }),
             "qwen2" | "qwen3" => Ok(Self { id: 1, is_moe: false }),
             "qwen3_5" | "qwen3_5_text" => Ok(Self { id: 5, is_moe: false }),
             "qwen3moe" | "qwen3_5_moe" | "qwen3_5_moe_text" => {
@@ -5227,6 +5227,7 @@ mod tests {
     #[test]
     fn hfq_architecture_contract_covers_supported_aliases() {
         assert_eq!(HfqArchitecture::from_source_name("llama").unwrap(), HfqArchitecture { id: 0, is_moe: false });
+        assert_eq!(HfqArchitecture::from_source_name("mistral").unwrap(), HfqArchitecture { id: 0, is_moe: false });
         assert_eq!(HfqArchitecture::from_source_name("qwen3").unwrap(), HfqArchitecture { id: 1, is_moe: false });
         assert_eq!(HfqArchitecture::from_source_name("qwen3_5_text").unwrap(), HfqArchitecture { id: 5, is_moe: false });
         assert_eq!(HfqArchitecture::from_source_name("qwen3_5_moe_text").unwrap(), HfqArchitecture { id: 6, is_moe: true });

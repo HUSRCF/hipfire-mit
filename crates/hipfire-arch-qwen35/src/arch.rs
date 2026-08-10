@@ -42,6 +42,13 @@ use rdna_compute::Gpu;
 /// the hybrid DeltaNet + FullAttention layer scheme.
 pub struct Qwen35;
 
+/// Validate the on-disk dense/MoE discriminator against the parsed model
+/// shape. Kept beside adapter ownership so config consumers cannot maintain a
+/// second, drifting interpretation of architecture ids.
+pub(crate) fn variant_matches_config(arch_id: u32, is_moe: bool) -> bool {
+    Qwen35::is_moe_arch_id(arch_id) == Some(is_moe)
+}
+
 impl Architecture for Qwen35 {
     type Weights = Qwen35Weights;
     type State = DeltaNetState;
@@ -126,5 +133,14 @@ mod tests {
         assert_eq!(Qwen35::is_moe_arch_id(5), Some(false));
         assert_eq!(Qwen35::is_moe_arch_id(6), Some(true));
         assert_eq!(Qwen35::is_moe_arch_id(0xFF), None);
+    }
+
+    #[test]
+    fn adapter_rejects_header_and_config_variant_mismatches() {
+        assert!(variant_matches_config(5, false));
+        assert!(variant_matches_config(6, true));
+        assert!(!variant_matches_config(5, true));
+        assert!(!variant_matches_config(6, false));
+        assert!(!variant_matches_config(0xFF, false));
     }
 }
