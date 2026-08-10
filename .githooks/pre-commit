@@ -29,9 +29,10 @@
 #      so the pflash regression stage at the tail of coherence-gate.sh
 #      no-ops.
 #
-#   5) Quantization numerical parity (~15s after build): deterministic
-#      CPU-reference/GPU comparisons for HFQ4, HFQ6, MQ3-Lloyd, HFP4, and
-#      rotated MFP4. Fires on quantization-format and dequantization paths.
+#   5) Quantization numerical parity (~20s after build): deterministic
+#      CPU-reference/GPU comparisons across classic Q4/Q8, HFQ3/4/6,
+#      MQ2/3, HFP4/MFP4, residual, tail-group, and Q8 KV paths. Fires on
+#      quantization-format and dequantization paths.
 #
 # Force-run heavy gates regardless of paths:
 #   HIPFIRE_FORCE_PFLASH_GATE=1 git commit ...   # run pflash anyway

@@ -25,6 +25,10 @@ trap cleanup EXIT
 runtime_examples=(
     --example test_hfq4g256QA
     --example test_hfq6g256
+    --example test_classic_quant_parity
+    --example verify_mq_kernel
+    --example test_gemv_hfq3g256_residual
+    --example test_q8kvQA
 )
 compute_examples=(
     --example test_gemv_mq3g256_lloyd_tail
@@ -101,6 +105,14 @@ run_case "HFQ4-G256 GEMV, embedding, and MMQ residual" \
     ./target/release/examples/test_hfq4g256QA
 run_case "HFQ6-G256 GEMV" \
     ./target/release/examples/test_hfq6g256
+run_case "Classic Q4K, Q4F16-G32/G64, Q8_0, and Q8HFQ GEMV" \
+    ./target/release/examples/test_classic_quant_parity
+run_case "MQ3-G256 and MQ2-G256 rotated GEMV" \
+    ./target/release/examples/verify_mq_kernel
+run_case "HFQ3-G256 residual GEMV shapes" \
+    ./target/release/examples/test_gemv_hfq3g256_residual
+run_case "Q8 KV cache write and attention" \
+    ./target/release/examples/test_q8kvQA
 run_case "MQ3-G256-Lloyd GEMV tail groups" \
     ./target/release/examples/test_gemv_mq3g256_lloyd_tail
 run_case "HFP4-G32 GEMV tail groups" \
@@ -114,4 +126,4 @@ if [ "$failures" -ne 0 ]; then
     echo "quant-parity-gate: $failures case(s) failed" >&2
     exit 1
 fi
-echo "quant-parity-gate: all 5 cases passed"
+echo "quant-parity-gate: all 9 cases passed"
