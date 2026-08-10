@@ -948,3 +948,39 @@ The conservative direction-table position is now complete through row 55 of
 2706; row 56 is next. The remaining direction count is 2651. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M15 evidence
+
+### Checked hybrid KV capacity record
+
+Direction row 56 records the preceding context-capacity reduction so its
+evidence remains reproducible rather than manually transcribed. Commit
+`8f34985` adds a GPU-free `hybrid_packed_kv_footprint` record derived from the
+same checked `packed_kv_footprint` layout used by the constructors. It reports
+all-layer bytes, filtered full-buffer bytes, non-KV placeholder bytes, and
+saved bytes, while rejecting zero, inverted, and overflowing layer shapes.
+
+The deterministic example now emits the four base packed formats plus Q8 and
+Asym3 records for the canonical 64-layer Qwen3.5 hybrid shape. The exact Q8
+record is 285,212,672 bytes all-layer, 71,303,552 bytes filtered, and
+213,909,120 bytes saved. The Asym3 record is 195,035,136 bytes all-layer,
+48,759,168 bytes filtered, and 146,275,968 bytes saved. Both include the exact
+384 bytes of absolute-index placeholders. Unit tests pin these values and the
+static audit separately requires four base records and two hybrid records.
+
+The full locked workspace all-target suite, workspace examples, clean-room
+audits, eleven-cell quant parity battery, four available standard coherence
+cells, four DFlash/DDTree cells, and the Qwen3.6 27B agentic cell pass on
+GPU0. Manual review found coherent bounded output, valid tool-call JSON, and
+no speculative or agentic warning.
+
+Three fresh GPU0 performance processes measure 1,287.6, 1,284.5, and 1,293.9
+prefill tok/s and 140.7, 140.6, and 139.8 decode tok/s. Their medians are
+1,287.6 and 140.6 tok/s. Relative to M14 they change by -0.89% and +0.07%, so
+the 5% cross-batch expansion rule did not fire. Relative to the committed
+W7900 floor they change by +4.91% and -0.21%.
+
+The conservative direction-table position is now complete through row 56 of
+2706; row 57 is next. The remaining direction count is 2650. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.

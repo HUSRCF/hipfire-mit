@@ -1806,3 +1806,66 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
   pair is absent; this is not counted as passing coverage.
 - Decision: accept row 55 as a production context-capacity reduction with
   unchanged KV numerical representation and full GPU0 non-regression evidence.
+
+---
+
+## M15: checked hybrid KV capacity record — 2026-08-10
+
+### Run identity
+
+- Regression parent: `a2f70789177ca610611cf7119b5c2cd9525548fb`.
+- Candidate commit: `8f349858ba69e9bd927b75627a61a387d4a4b45c`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Runtime source SHA-256:
+  `b6b5248facad48aefaf582a03b82d9f4573926d8d55fd8b060288d43ba8b0aa9`.
+- Capacity example SHA-256:
+  `4bed57a4d7d6f271d52dead5d4db03e0d0292de091f14bbba2609ce75f9cf97d`.
+- Static audit SHA-256:
+  `fdd5ad2ee7c7de8548b3201684e1c9df895573783c2438479aa9e8d37475800b`.
+- Deterministic JSON SHA-256:
+  `50dbef9253387d5affa816f66c9006d6f4c60f39f9c38c99c8e3104adf96b531`.
+- Candidate commit diff SHA-256:
+  `60f31d2dfd0df615d5c7ba04812de88cc071088768b207ec7dbc71bf6bb43905`.
+- Final quant report md5: `ab2cf18c1b3d9788a442a2ce6db14da0`.
+- Final standard-coherence report md5: `9535fc0729c434ddb600b3e9ff10d483`.
+- Final DFlash report md5: `b14ce5c61cebffbc148a2baf5071b1a0`.
+- Final agentic report md5: `57f0ea1c5d8ee96d95b21db2754f387f`.
+- Environment: GPU0-only ROCr/HIP visibility, ROCm 7.14 library path,
+  local read-only model directory, W7900 baseline selection, explicit
+  speed-gate DPM warm-up, and per-child GPU-lock serialization.
+- Full command: `./scripts/cleanroom-integration-gate.sh --speed-runs 3
+  --out /tmp/hipfire-integration-row56` under the recorded environment.
+- Machine manifest: `/tmp/hipfire-integration-row56/summary.md`.
+
+### Canonical hybrid allocation
+
+| Format | All-layer bytes | Filtered bytes | Placeholders | Saved bytes |
+|---|---:|---:|---:|---:|
+| Q8 | 285,212,672 | 71,303,552 | 384 | 213,909,120 |
+| Asym3 | 195,035,136 | 48,759,168 | 384 | 146,275,968 |
+
+### GPU measurements
+
+| Metric | Committed floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1287.6 | 1284.5 | 1293.9 | 1287.6 |
+| 4B MQ4 decode tok/s | 140.9 | 140.7 | 140.6 | 139.8 | 140.6 |
+
+### Decision
+
+- The public GPU-free record derives all figures from the constructor-shared
+  checked layout and includes exact non-KV placeholder storage.
+- Unit tests pin Q8 and Asym3 values and reject invalid hybrid layer counts;
+  the audit separately requires four base formats and two hybrid records.
+- GPU medians change by +4.91% prefill and -0.21% decode versus the committed
+  W7900 floor. Relative to M14 they change by -0.89% and +0.07%, so no
+  five-run expansion was required.
+- Full locked workspace tests, examples, static audits, MIT boundary, and all
+  available GPU0 gates pass. Standard, DFlash/DDTree, and agentic outputs were
+  manually reviewed; all four DFlash/DDTree detectors report `ok=true` and
+  `soft_warn=false`, and agentic reports zero hard failures or soft warnings.
+- PFlash remains explicitly skipped because the required local target/drafter
+  pair is absent; this is not counted as passing coverage.
+- Decision: accept row 56 as a reproducible, checked record of the hybrid KV
+  capacity reduction with full GPU0 non-regression evidence.
