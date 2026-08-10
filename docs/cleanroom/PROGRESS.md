@@ -328,3 +328,32 @@ W7900 floor. This is recorded only as non-regression because the new checks
 execute on the opt-in eviction path, not the measured default benchmark path.
 Full run identities, binary hashes, and reports are in
 `docs/cleanroom/PERFORMANCE_RECORD.md`.
+
+### MQ6 common-loader closure
+
+Commit `a432e8694356e4c1993266f75d8096d051e1c9d2` closes a format-routing gap
+found while expanding the quantization coverage matrix. The MIT quantizer can
+emit `quant_type=15` MQ6-G256 tensors, the HFQ index validator accepts their
+200-byte/256-element layout, and the runtime already dispatches MQ6 kernels,
+but the common LLaMA-family HFQ weight loader omitted the corresponding dtype
+arm. Such a model therefore failed during loading before reaching the existing
+kernel. The loader now uploads the opaque payload as `DType::MQ6G256`, matching
+the already-supported Qwen3.5 route.
+
+The rotated MQ parity anchor now independently transforms and quantizes
+synthetic weights to MQ6, decodes its packed six-bit payload on the CPU, and
+compares that reference with the GPU rotate-plus-GEMV path. GPU0 maximum
+absolute errors are `6.10e-5`, `2.44e-4`, and `8.54e-4` at K=256, 512, and
+1024, all below the fixed `1e-3` limit; the standalone FWHT remains
+element-exact. The unified nine-cell quantization gate, 183 runtime library
+tests, all DeltaNet runtime examples, and the clean-room license gate pass.
+
+The four available standard coherence cells and all four DFlash/DDTree cells
+pass after manual review; speculative detectors report `ok=true` and
+`soft_warn=false`. The commit-hook Qwen3.6 27B agentic cell emits valid `read`
+JSON with zero warnings. Three fresh speed observations have median 1269.6
+prefill tok/s and 140.3 decode tok/s, respectively +3.45% and -0.43% versus
+the committed W7900 floor; the hook repetition also passes. This records
+non-regression only, because the change activates an existing MQ6 execution
+path rather than altering its kernel. Detailed evidence is in
+`docs/cleanroom/PERFORMANCE_RECORD.md`.

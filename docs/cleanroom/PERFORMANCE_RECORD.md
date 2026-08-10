@@ -712,3 +712,66 @@ decode tok/s.
 - Decision: accept portable numerical parity for the currently exercised
   registered classic, HFQ, MQ, HFP4/MFP4, and Q8-cache paths as the sixth M3
   deliverable. Model-level quality and remaining registered formats stay open.
+
+---
+
+## M3: MQ6 common-loader closure — 2026-08-10
+
+### Run identity
+
+- Regression parent: `6d0ab235ec3d4a56a5763637fa7da13b71b37639`.
+- Candidate commit: `a432e8694356e4c1993266f75d8096d051e1c9d2`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Candidate benchmark md5: `2225075fb69cda29d06034e64982296b`.
+- Candidate daemon md5: `dbc7a5fdf00c9038992933f29696150b`.
+- Candidate DFlash md5: `fe1ee567a4b1ab04363090f8bb15696d`.
+- MQ parity anchor md5: `649d98c68ee9a3d26942a5c38b41568a`.
+- Environment: `ROCR_VISIBLE_DEVICES=0`, `HIP_VISIBLE_DEVICES=0`,
+  `HIPFIRE_MODELS_DIR=/home/husrcf/.hipfire/models`,
+  `HIPFIRE_BASELINE_ARCH=gfx1100-w7900`, and ROCm 7.14 runtime directories
+  prepended to `LD_LIBRARY_PATH`. Every GPU command was serialized by
+  `scripts/gpu-lock.sh`.
+- Correctness commands: `cargo test -p hipfire-runtime --lib`,
+  `cargo check -p hipfire-runtime --examples --features deltanet`,
+  `./scripts/cleanroom-gate.sh`, `./scripts/quant-parity-gate.sh`,
+  `./scripts/coherence-gate.sh`, and `./scripts/coherence-gate-dflash.sh`.
+- Performance command: three fresh invocations of
+  `./scripts/speed-gate.sh --fast`. Each observation is the gate's best of two
+  executions using deterministic synthetic token IDs `0..31`.
+
+### Measurements
+
+| Metric | Committed floor | Candidate observation 1 | Candidate observation 2 | Candidate observation 3 | Candidate median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1270.0 | 1269.6 | 1248.4 | 1269.6 |
+| 4B MQ4 decode tok/s | 140.9 | 141.4 | 140.3 | 140.2 | 140.3 |
+
+The commit-hook repetition also passed at 1254.1 prefill tok/s and 140.8
+decode tok/s.
+
+### Decision
+
+- Candidate median delta: +3.45% prefill and -0.43% decode. Every observation
+  passes the committed 5% regression tolerance. The loader change routes a
+  previously rejected format to its existing kernel; no speedup is attributed
+  to the change.
+- MQ6 numerical parity: the independent CPU decoder and GPU rotate-plus-GEMV
+  agree with maximum absolute error `6.103516e-5` at K=256,
+  `2.441406e-4` at K=512, and `8.544922e-4` at K=1024, under the fixed
+  `1e-3` limit. Standalone FWHT output is element-exact at all three shapes.
+- Unified GPU0 parity: all nine cases pass. Reports:
+  `/tmp/quant-parity-mq6-loader.md` and commit-hook repetition
+  `/tmp/quant-parity-20260810-100100.md`.
+- Standard GPU0 coherence: four available cells pass and were manually
+  checked. Reports: `/tmp/coherence-mq6-loader.md` and commit-hook repetition
+  `/tmp/coherence-20260810-100102.md`.
+- DFlash/DDTree GPU0 coherence: all four cells report `ok=true` and
+  `soft_warn=false`; prose/code outputs were manually reviewed. Report:
+  `/tmp/coherence-dflash-20260810-095806.md`.
+- Agentic commit-hook quality: the Qwen3.6 27B cell emits valid
+  `name='read'` JSON with zero warnings. Report:
+  `/tmp/agentic-gate-20260810-100118.md`.
+- Decision: accept common-loader support and a portable numerical oracle for
+  MQ6-G256 as the seventh M3 deliverable. The remaining registered formats
+  and model-level quality milestones stay open.
