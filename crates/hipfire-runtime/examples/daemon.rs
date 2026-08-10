@@ -1590,22 +1590,16 @@ fn load_model(path: &str, max_seq: usize, draft_path: Option<&str>, kv_mode_over
         let config = <Qwen35 as Architecture>::config_from_hfq(&hfq)
             .map_err(|e| e.to_string())?;
 
-        // Detect VL model: vision_config presence (from HFQ metadata) AND
-        // actual vision tensors are required. Text-only Qwen3.5 models can
-        // have vision_config in metadata without the patch_embed weights.
-        // PR 9: bring-up triple now goes through the Qwen35Vl trait impl;
-        // forward (`qwen35_vl::vision_forward`) stays a direct static call.
-        let has_vision_tensors = hfq.tensor_data("model.visual.patch_embed.proj.weight").is_some();
-        let vision_config = <Qwen35Vl as Architecture>::config_from_hfq(&hfq).ok();
+        // The VL adapter owns optional-component detection. Text-only exports
+        // may retain dormant vision metadata, but a file with actual vision
+        // weights must parse a valid vision config instead of silently
+        // degrading to text-only execution.
+        let vision_config = Qwen35Vl::config_from_hfq_if_present(&hfq)?;
         let (vision_config, vision_weights) = if let Some(vc) = vision_config {
-            if has_vision_tensors {
-                let vw = <Qwen35Vl as Architecture>::load_weights(&mut hfq, &vc, gpu)
-                    .map_err(|e| format!("{e}"))?;
-                eprintln!("  VL model: vision encoder (hidden={}, layers={})", vc.hidden_size, vc.num_layers);
-                (Some(vc), Some(vw))
-            } else {
-                (None, None) // text-only model, no vision tensors
-            }
+            let vw = <Qwen35Vl as Architecture>::load_weights(&mut hfq, &vc, gpu)
+                .map_err(|e| format!("{e}"))?;
+            eprintln!("  VL model: vision encoder (hidden={}, layers={})", vc.hidden_size, vc.num_layers);
+            (Some(vc), Some(vw))
         } else {
             (None, None)
         };
@@ -1818,9 +1812,7 @@ fn load_model_pp(
             hfq.arch_id
         ));
     }
-    if qwen35_vl::vision_config_from_hfq(&hfq).is_some()
-        && hfq.tensor_data("model.visual.patch_embed.proj.weight").is_some()
-    {
+    if Qwen35Vl::config_from_hfq_if_present(&hfq)?.is_some() {
         return Err("pp>1 does not support VL models in v1; see issue #58 v1.1 roadmap".into());
     }
 

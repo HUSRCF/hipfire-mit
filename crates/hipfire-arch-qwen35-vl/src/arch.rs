@@ -45,6 +45,37 @@ use rdna_compute::Gpu;
 /// decoder side.
 pub struct Qwen35Vl;
 
+const VISION_PATCH_EMBED: &str = "model.visual.patch_embed.proj.weight";
+
+fn require_component_config<T>(
+    component_present: bool,
+    parse: impl FnOnce() -> Result<T, String>,
+) -> Result<Option<T>, String> {
+    if component_present {
+        parse().map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+impl Qwen35Vl {
+    /// Parse the optional vision-tower configuration when vision weights are
+    /// present. Some text-only exports retain a dormant `vision_config`, so
+    /// metadata alone does not activate the adapter. Conversely, an actual
+    /// vision tensor bundle must never be silently downgraded to text-only
+    /// when its configuration is malformed.
+    pub fn config_from_hfq_if_present(hfq: &HfqFile) -> Result<Option<VisionConfig>, String> {
+        let has_vision_weights = hfq.tensor_data(VISION_PATCH_EMBED).is_some();
+        require_component_config(has_vision_weights, || {
+            <Self as Architecture>::config_from_hfq(hfq).map_err(|error| {
+                format!(
+                    "qwen35-vl: vision weights are present but their configuration is invalid: {error}"
+                )
+            })
+        })
+    }
+}
+
 impl Architecture for Qwen35Vl {
     type Weights = VisionWeights;
     type State = ();
@@ -112,5 +143,19 @@ mod tests {
         assert!(Qwen35Vl::supports_arch_id(6));
         assert!(!Qwen35Vl::supports_arch_id(1));
         assert!(!Qwen35Vl::supports_arch_id(0xFF));
+    }
+
+    #[test]
+    fn optional_component_admission_fails_closed_only_when_weights_exist() {
+        let absent = require_component_config::<u32>(false, || {
+            panic!("text-only models must not parse dormant vision metadata")
+        });
+        assert_eq!(absent, Ok(None));
+
+        let present = require_component_config(true, || Ok(17u32));
+        assert_eq!(present, Ok(Some(17)));
+
+        let malformed = require_component_config::<u32>(true, || Err("bad config".into()));
+        assert_eq!(malformed, Err("bad config".into()));
     }
 }

@@ -68,6 +68,19 @@ if ! rg -q '<Qwen35 as Architecture>::protocol_label\(arch_id\)' "$daemon"; then
     exit 1
 fi
 
+if rg -n 'model\.visual\.patch_embed\.proj\.weight' "$daemon"; then
+    echo "architecture adapter audit: daemon duplicated VL component detection" >&2
+    exit 1
+fi
+if [ "$(rg -c 'Qwen35Vl::config_from_hfq_if_present\(&hfq\)\?' "$daemon")" -lt 2 ]; then
+    echo "architecture adapter audit: daemon bypasses fail-closed VL admission" >&2
+    exit 1
+fi
+if rg -n '<Qwen35Vl as Architecture>::config_from_hfq\(&hfq\)\.ok\(\)' "$daemon"; then
+    echo "architecture adapter audit: daemon discards VL configuration errors" >&2
+    exit 1
+fi
+
 for consumer in \
     crates/hipfire-arch-qwen35/src/pflash.rs \
     crates/hipfire-runtime/examples/pflash_load_demo.rs
