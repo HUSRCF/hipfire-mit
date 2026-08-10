@@ -1015,3 +1015,32 @@ The conservative direction-table position is now complete through row 57 of
 2706; row 58 is next. The remaining direction count is 2649. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M17 evidence
+
+### Machine-readable long-context Q8 record
+
+Direction row 58 records the preceding context-path exploration. Commit
+`885f45c` extends the existing GPU benchmark with `--record PATH` and emits
+the versioned `hipfire.long_context_q8.v1` JSON schema. The record binds the
+model and GPU architecture to prefill length/time, measured sequence length,
+reference and flash attention latency, speedup, and absolute/relative parity.
+A static audit requires every field to remain derived from the values printed
+by the production benchmark.
+
+The canonical GPU0 record uses the 0.8B model and 15,001-token Q8 prefill. It
+reports 4,574.5 ms prefill, sequence length 15,006, 921.9 us reference
+attention, 168.8 us flash attention, 5.46x speedup, and maximum absolute delta
+`5.72e-6`. Automated JSON checks require the schema, >15K coverage, flash
+speedup above one, and maximum absolute delta below `1e-3`.
+
+The full workspace and MIT audits plus all GPU0 quality gates pass. Three
+fresh performance processes measure 1,319.6, 1,261.4, and 1,274.8 prefill
+tok/s and 141.2, 140.5, and 139.9 decode tok/s. Medians are 1,274.8 and 140.5
+tok/s, changing by -0.85% and +0.29% from M16, so no five-run expansion was
+required.
+
+The conservative direction-table position is now complete through row 58 of
+2706; row 59 is next. The remaining direction count is 2648. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.

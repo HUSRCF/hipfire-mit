@@ -1920,3 +1920,53 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
   output; all DFlash/DDTree detectors are clean and agentic has zero warnings.
 - Decision: accept row 57 as a measured context-movement reduction with full
   MIT-boundary and GPU0 non-regression evidence.
+
+---
+
+## M17: machine-readable long-context Q8 record — 2026-08-11
+
+### Run identity
+
+- Regression parent: `f1b1b98a7a881ba9ae0a6fb1847fc392ed8d0f52`.
+- Candidate commit: `885f45c`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Benchmark SHA-256: `fec922ce3812cfba555980774f28ca114ae7313d53b06c789dcad41c07df8d02`.
+- Record audit SHA-256: `1f71fee9bca4c237ed1180139b8442825f767ba50a66962c865ea295227c8cac`.
+- JSON record SHA-256: `8f0c81792cf4dcaddf25c6ec646d968a0771d4eb91dbe3b89853a316fc493c9c`.
+- Candidate diff SHA-256: `57053aae5cffee9413d735d51e1b2804ef14f98b9dacfd7d1f4ca1eac51afeb6`.
+- Reports md5: quant `e9570e29443e205d2b1cdfddf77af615`, standard
+  `f8c867879ebac364dea9611d5528d2d8`, DFlash
+  `2b57beeaa913acdeeee7f0ef32e418a0`, agentic
+  `64ab60562ec15b862c1b484b9c1c3833`.
+- Full gate: `/tmp/hipfire-integration-row58/summary.md`.
+
+### Recorded long-context result
+
+| Field | Value |
+|---|---:|
+| Prefill tokens | 15,001 |
+| Prefill time | 4,574.5 ms |
+| Sequence length | 15,006 |
+| Reference attention | 921.9 us |
+| Flash attention | 168.8 us |
+| Flash speedup | 5.46x |
+| Maximum absolute delta | 5.72e-6 |
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1319.6 | 1261.4 | 1274.8 | 1274.8 |
+| 4B MQ4 decode tok/s | 140.9 | 141.2 | 140.5 | 139.9 | 140.5 |
+
+### Decision
+
+- The benchmark can persist a versioned record derived from the same measured
+  values used by its human-readable output; the audit pins all evidence fields.
+- Full CPU and GPU0 gates pass. Normal medians change -0.85%/+0.29% from M16
+  and remain +3.87%/-0.28% versus the committed floor.
+- Generated outputs were manually reviewed; DFlash/DDTree reports four clean
+  detectors and agentic reports zero hard failures and zero soft warnings.
+- Decision: accept row 58 as reproducible context-path evidence with full
+  performance and numerical-continuity records.
