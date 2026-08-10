@@ -1334,3 +1334,30 @@ The conservative direction-table position is now complete through row 67 of
 2706; row 68 is next. The remaining direction count is 2639. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M27 evidence
+
+### Fail-closed quantizer architecture contract
+
+Direction row 68 fixes duplicated architecture adaptation in the quantizer.
+The GGUF and Safetensors entry points maintained separate source-name maps and
+silently tagged unknown or missing architectures as LLaMA. That could produce
+a syntactically valid HFQ file whose header selected an incompatible loader.
+
+Commit `eea2a90` introduces one pure-CPU `HfqArchitecture` contract carrying
+the wire ID and MoE capability. Both input paths consume it, existing LLaMA,
+Qwen2/3, Qwen3.5 dense, and Qwen3.5 MoE aliases retain their IDs, and unknown
+families now return an explicit error. Two focused tests cover supported
+aliases and the fail-closed case; the quantizer suite passes all 86 tests and
+a static integration audit prevents the duplicated fallbacks from returning.
+
+The full CPU and GPU0 batteries pass, including eleven quant-parity cases,
+standard coherence, four clean DFlash/DDTree cases, and Agentic with zero
+warnings. Three speed processes measure 1,293.6, 1,307.7, and 1,303.6 prefill
+tok/s and 141.2, 140.5, and 140.5 decode tok/s. Medians are 1,303.6 and 140.5,
+changing +2.59% and -0.21% from M26; no five-run expansion was required.
+
+The conservative direction-table position is now complete through row 68 of
+2706; row 69 is next. The remaining direction count is 2638. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.

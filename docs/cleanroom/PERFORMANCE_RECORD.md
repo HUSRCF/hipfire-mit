@@ -2367,3 +2367,44 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
   speculative detectors are clean and agentic reports zero warnings.
 - Decision: accept row 67 as a cold-path adapter-ownership correction with
   MIT-boundary, quality, and performance non-regression evidence.
+
+---
+
+## M27: fail-closed quantizer architecture contract — 2026-08-11
+
+### Run identity
+
+- Regression parent: `20cfb243caa5f07983bebe1901d5607530bd258e`.
+- Candidate commit: `eea2a90a3b54933abcdc349937a236a126f8bef2`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Quantizer SHA-256: `62847ff7de8454e6756ecf3d4c9ddd49967610b51fc09cdf9a540a469bb709c8`.
+- Architecture audit SHA-256: `b9516d2389fc630c0513f1c422c72a47ad17c7e64103035ef8973f22303c35f7`.
+- Integration gate SHA-256: `7bb412834c2a6c105f39f9dc942330e2acfe5e7e885a7f21807c9f265c187849`.
+- Candidate diff SHA-256: `4fb05cea4df031d7f2990093ee2d574e239437a22a0a2d94464463110b86633e`.
+- Reports md5: quant `b78b3b99d272c07ec77a5e824e126f04`, standard
+  `0edfa02a916b6f9ed762e0591da64ee3`, DFlash
+  `d39259b7529550828fb3eaf33eabe76c`, agentic
+  `19305e72be9ae70fcba99aee636344d8`.
+- Full gate: `/tmp/hipfire-integration-row68/summary.md`.
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1293.6 | 1307.7 | 1303.6 | 1303.6 |
+| 4B MQ4 decode tok/s | 140.9 | 141.2 | 140.5 | 140.5 | 140.5 |
+
+### Decision
+
+- GGUF and Safetensors quantization now share one architecture-ID and MoE
+  contract; supported aliases retain their existing wire identifiers.
+- Missing or unknown source architecture names fail closed instead of being
+  silently emitted as LLaMA-compatible HFQ files.
+- All 86 quantizer tests, CPU gates, and GPU0 gates pass. Performance medians
+  change +2.59%/-0.21% from M26 and remain +6.22%/-0.28% versus the floor;
+  no five-run expansion was required.
+- Generated outputs were manually reviewed as on-topic and non-looping; all
+  speculative detectors are clean and agentic reports zero warnings.
+- Decision: accept row 68 as a quantization cold-path model-adaptation fix
+  with explicit fail-closed, MIT-boundary, quality, and performance evidence.
