@@ -110,7 +110,7 @@ run_case "Classic Q4K, Q4F16-G32/G64, Q8_0, and Q8HFQ GEMV" \
     ./target/release/examples/test_classic_quant_parity
 run_case "Compact HFQ4/HFQ3/HFQ2 and MQ2-Lloyd GEMV" \
     ./target/release/examples/test_compact_quant_parity
-run_case "MQ6-G256, MQ3-G256, and MQ2-G256 rotated GEMV" \
+run_case "MQ8/MQ6/MQ4/MQ3/MQ2 rotated GEMV" \
     ./target/release/examples/verify_mq_kernel
 run_case "HFQ3-G256 residual GEMV shapes" \
     ./target/release/examples/test_gemv_hfq3g256_residual
