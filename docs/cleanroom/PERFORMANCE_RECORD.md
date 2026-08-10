@@ -644,3 +644,71 @@ decode tok/s.
 - Decision: accept a mandatory independent numerical oracle as the fifth M3
   deliverable. Broader format coverage and model-level quantization quality
   remain open.
+
+---
+
+## M3: expanded registered-format parity coverage — 2026-08-10
+
+### Run identity
+
+- Regression parent: `8bcd7760b0e8a0e0625fa08b13fbfb234064ba56`.
+- Candidate commit: `912d193ade56fb41db940f01036b7f7a680c9329`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Candidate benchmark md5: `5bc7854e8530d4c1c75f0ba1aab2aa98`.
+- Candidate daemon md5: `8b3cd494a24a7378ddaf38be58c88ae6`.
+- Candidate DFlash md5: `fe1ee567a4b1ab04363090f8bb15696d`.
+- Classic-format anchor md5: `7b211d421224af85dd90e390ea17b422`.
+- Environment: `ROCR_VISIBLE_DEVICES=0`, `HIP_VISIBLE_DEVICES=0`,
+  `HIPFIRE_MODELS_DIR=/home/husrcf/.hipfire/models`,
+  `HIPFIRE_BASELINE_ARCH=gfx1100-w7900`, and ROCm 7.14 runtime directories
+  prepended to `LD_LIBRARY_PATH`. Every GPU command was serialized by
+  `scripts/gpu-lock.sh`.
+- Correctness commands: `cargo test -p hipfire-runtime --lib`,
+  `cargo check -p hipfire-runtime --examples --features deltanet`,
+  `./scripts/cleanroom-gate.sh`, `./scripts/quant-parity-gate.sh`,
+  `./scripts/coherence-gate.sh`, and `./scripts/coherence-gate-dflash.sh`.
+- Performance command: three fresh invocations of
+  `./scripts/speed-gate.sh --fast`. Each observation is the gate's best of two
+  executions using deterministic synthetic token IDs `0..31`.
+
+### Measurements
+
+| Metric | Committed floor | Candidate observation 1 | Candidate observation 2 | Candidate observation 3 | Candidate median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1287.2 | 1324.8 | 1365.4 | 1324.8 |
+| 4B MQ4 decode tok/s | 140.9 | 141.8 | 141.2 | 141.0 | 141.2 |
+
+The commit-hook repetition also passed at 1393.7 prefill tok/s and 141.3
+decode tok/s.
+
+### Decision
+
+- Candidate median delta: +7.94% prefill and +0.21% decode. All observations
+  pass the committed regression tolerance. The inference executable hashes
+  are unchanged because this batch adds test coverage only; no speedup is
+  attributed to it.
+- Classic formats: synthetic Q4K/Q4F16/Q8 data require no model files. Maximum
+  GPU/CPU absolute errors are `2.384186e-7` (Q4K), `4.808977e-4`
+  (Q4F16-G32), `4.756898e-4` (Q4F16-G64), `9.499490e-8` (Q8_0), and
+  `6.332994e-8` (Q8HFQ). Q4K exercises packed high scale/min bits and Q8HFQ
+  verifies a 512-byte aligned row stride.
+- Additional formats: rotated MQ3/MQ2 remain below `1e-3`, isolated FWHT is
+  element-exact through K=1024, HFQ3 residual output is exact at K=256,
+  1024, 4096, and 11008, and Q8 KV round-trip error is `0.012305` under its
+  fixed `0.05` threshold.
+- Unified GPU0 parity: all nine cases pass. Report:
+  `/tmp/quant-parity-expanded.md`; commit-hook repetition:
+  `/tmp/quant-parity-20260810-094909.md`.
+- Standard GPU0 coherence: four available cells pass and were manually
+  checked. Report: `/tmp/coherence-quant-expanded.md`; commit-hook repetition:
+  `/tmp/coherence-20260810-094912.md`.
+- DFlash/DDTree GPU0 coherence: all four cells report `ok=true` and
+  `soft_warn=false`; prose/code outputs were manually reviewed. Report:
+  `/tmp/coherence-dflash-quant-expanded.md`.
+- Agentic commit-hook quality: one Qwen 3.6 27B cell passes with valid
+  `name='read'` JSON and zero warnings. Report:
+  `/tmp/agentic-gate-20260810-094928.md`.
+- Decision: accept portable numerical parity for the currently exercised
+  registered classic, HFQ, MQ, HFP4/MFP4, and Q8-cache paths as the sixth M3
+  deliverable. Model-level quality and remaining registered formats stay open.

@@ -16,7 +16,7 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M0: governance and reproducibility | 1-2 | complete | MIT/source gate, clean-room PR declaration, build and performance baselines |
 | M1: speculative decode foundation | 3-8 | complete | shared greedy acceptance contract, semantic statistics, deterministic tests, and GPU0 correctness/throughput acceptance |
 | M2: release and device execution | 10-18 | in progress | reproducible delivery and the device-execution foundation are complete; remaining quantization, maintenance, and integration directions are still open |
-| M3: quantization and context paths | 19-39 | in progress | strict HFQ boundaries and quant-payload layouts, GPU/CPU quant parity gating, shared packed-KV allocation, and checked long-context position continuity are complete; full format fidelity remains open |
+| M3: quantization and context paths | 19-39 | in progress | strict HFQ boundaries and quant-payload layouts, nine-cell GPU/CPU quant parity gating, shared packed-KV allocation, and checked long-context position continuity are complete; full model-level format fidelity remains open |
 
 ## M0 evidence
 
@@ -226,6 +226,32 @@ Three fresh performance observations have median 1302.9 prefill tok/s and
 140.4 decode tok/s, respectively +6.16% and -0.35% versus the committed W7900
 floor. This testing-only change does not alter inference binaries, so the
 measurements establish non-regression only. Full report identities are in
+`docs/cleanroom/PERFORMANCE_RECORD.md`.
+
+### Expanded registered-format parity coverage
+
+Commit `912d193ade56fb41db940f01036b7f7a680c9329` expands the mandatory
+quantization battery from five representative cells to nine. A new synthetic,
+model-independent anchor constructs valid Q4K blocks with packed high
+scale/min bits, derives Q4F16-G32 and G64 payloads, constructs Q8_0 and
+row-aligned Q8HFQ payloads, and compares every GPU GEMV against an independent
+CPU dequantization reference. It removes the evidence gap left by historical
+Q4 tests that skip when a developer-specific TinyLlama GGUF is absent.
+
+The gate now also includes rotated MQ3/MQ2 GEMV with isolated FWHT parity,
+HFQ3 residual GEMV across four shapes, and Q8 KV write/attention, in addition
+to the prior HFQ4, HFQ6, MQ3-Lloyd, HFP4, and MFP4 cases. All nine cells pass
+on GPU0. Classic-format maximum absolute errors are `2.38e-7` for Q4K,
+`4.81e-4` for Q4F16-G32, `4.76e-4` for Q4F16-G64, `9.50e-8` for Q8_0,
+and `6.33e-8` for Q8HFQ. MQ rotation is element-exact, all HFQ3 residual
+shapes are exact, and the Q8 KV round-trip remains below its fixed threshold.
+
+All 183 runtime library tests and every runtime example with DeltaNet pass.
+Standard coherence and all four DFlash/DDTree cells pass after manual review.
+Three fresh speed runs have median 1324.8 prefill tok/s and 141.2 decode
+tok/s, respectively +7.94% and +0.21% versus the committed W7900 floor. The
+inference binaries are unchanged, so these are non-regression observations,
+not an attributed speedup. Detailed evidence is in
 `docs/cleanroom/PERFORMANCE_RECORD.md`.
 
 ### Packed KV allocation contract
