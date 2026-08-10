@@ -1970,3 +1970,58 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
   detectors and agentic reports zero hard failures and zero soft warnings.
 - Decision: accept row 58 as reproducible context-path evidence with full
   performance and numerical-continuity records.
+
+---
+
+## M18: capturable Q8 long-context prefill — 2026-08-11
+
+### Run identity
+
+- Regression parent: `6402f2a04fdd9493adefef05517220ffc10d3420`.
+- Candidate commit: `84b5d79c12bb7132c9eec70d29440f6655bd0709`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Qwen3.5 runtime SHA-256: `1e604bb90038727c490bc52c6312615da8414c03dd5e2d034d8b710d327a19c4`.
+- Benchmark SHA-256: `40e1157842fbe4788211f55620bc86adc30b7310d8e8399bace34a26c42c1e04`.
+- Capture audit SHA-256: `c2274ac046e51b9da620da2b29c99aba97653f30d8e0e29815ef400c61ce56c1`.
+- JSON record SHA-256: `2de0ab282f3cdb9760d1fcc9d99c7e71738cb31cc25f9af695d234e772f0b017`.
+- Candidate diff SHA-256: `0dfa090c2a7ff055ca632cd48043b9a26bb27e0dfed948886487e81a71984d43`.
+- Reports md5: quant `0843cf6cf972b43fe92f19925407d520`, standard
+  `81dfc3f52030c29a1f599c78150d66c2`, DFlash
+  `c4b59a62e5a82f1e893a7899ec1caeb0`, agentic
+  `a791dcdbdcf72b79edec009ff8eb5b52`.
+- Full gate: `/tmp/hipfire-integration-row59/summary.md`.
+
+### Captured long-context result
+
+| Field | Value |
+|---|---:|
+| Initial Q8 prefill tokens | 15,001 |
+| Initial prefill time | 4,610.4 ms |
+| Captured prefill start position | 15,001 |
+| Captured prefill tokens | 2 |
+| Captured HIP graph blobs | 447 |
+| Measured sequence length | 15,006 |
+| Reference attention | 926.5 us |
+| Flash attention | 168.4 us |
+| Flash speedup | 5.50x |
+| Maximum absolute delta | 6.44e-6 |
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1295.8 | 1289.9 | 1268.7 | 1289.9 |
+| 4B MQ4 decode tok/s | 140.9 | 140.9 | 140.5 | 140.4 | 140.5 |
+
+### Decision
+
+- Q8 prefill beyond 15K now survives explicit graph capture and launch; the
+  final hidden-state copy follows the active capture stream.
+- Full CPU and GPU0 gates pass. Normal medians change +1.18%/0.00% from M17
+  and remain +5.10%/-0.28% versus the committed floor.
+- Generated outputs were manually reviewed; standard and DFlash/DDTree output
+  is coherent, all speculative detectors are clean, and agentic reports zero
+  hard failures and zero soft warnings.
+- Decision: accept row 59 as a measured long-context capture extension with
+  full MIT-boundary, numerical-continuity, and performance evidence.

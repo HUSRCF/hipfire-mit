@@ -1044,3 +1044,35 @@ The conservative direction-table position is now complete through row 58 of
 2706; row 59 is next. The remaining direction count is 2648. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M18 evidence
+
+### Capturable Q8 long-context prefill
+
+Direction row 59 continues reducing long-context state movement. Commit
+`84b5d79` removes the obsolete Q8 >15K capture refusal after M16 made the
+per-position fallback allocation-free. It also routes the final hidden-state
+device copy through the capture-aware stream helper, avoiding an implicit
+legacy-stream dependency while a blocking stream is being captured. A new
+optional benchmark probe warms, captures, launches, and synchronizes the
+production Qwen3.5 single-chunk prefill entry point, and records the captured
+blob count in the existing versioned JSON evidence.
+
+The canonical GPU0 probe uses a 15,001-token Q8 prefill followed by a two-token
+captured prefill at position 15,001. The capture contains 447 HIP graph blobs
+and launches successfully. The full run reports 4,610.4 ms initial prefill,
+sequence length 15,006, 926.5 us reference attention, 168.4 us flash attention,
+5.50x speedup, and maximum absolute delta `6.44e-6`.
+
+The full workspace and MIT audits, eleven-cell quant parity, standard
+coherence, four DFlash/DDTree cells, and the Qwen3.6 27B agentic cell all pass
+on GPU0. Manual review found coherent bounded output, clean speculative
+detectors, valid tool-call JSON, and zero agentic warnings. Three fresh
+performance processes measure 1,295.8, 1,289.9, and 1,268.7 prefill tok/s and
+140.9, 140.5, and 140.4 decode tok/s. Medians are 1,289.9 and 140.5 tok/s,
+changing by +1.18% and 0.00% from M17, so no five-run expansion was required.
+
+The conservative direction-table position is now complete through row 59 of
+2706; row 60 is next. The remaining direction count is 2647. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.
