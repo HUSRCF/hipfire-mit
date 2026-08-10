@@ -2230,3 +2230,47 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
 - Decision: accept row 64 as a cold-path HFQ format-compatibility correction
   with explicit evidence limits, MIT-boundary checks, and performance
   non-regression evidence.
+
+---
+
+## M24: fail-closed PP/DFlash convergence — 2026-08-11
+
+### Run identity
+
+- Regression parent: `729f2b35fafa2a13d5be7a226f9b18000433a21f`.
+- Candidate commit: `4239b527d8c7ae3b15f81981467924365dd7c25e`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Daemon SHA-256: `df95e4206d7bc1f660fa5bbde0c8f1500cf519aad3d03a6ad98b887844850e01`.
+- PP/DFlash audit SHA-256: `780dcb64dc2d86c776a44f940208e0fc9e25bacc60c351f4cf3ce4b616e58c97`.
+- Integration gate SHA-256: `af15109ad614040171affa6c02ff4d5e612eaf173b2770d79c71d91810c4f2b5`.
+- Candidate diff SHA-256: `b8f817f61139151441ebf436af225a78465f8dbd4fc8ba54b265632b442d2f5c`.
+- Reports md5: quant `0614f062a8f127fc0151eb394198e16c`, standard
+  `b1ea10a00ad87597f4c314469aa28472`, DFlash
+  `9fbdac4fcf5b305de8d8f192ad10ecab`, agentic
+  `fa43b1f55e1360e5d482944553860ba0`.
+- Full gate: `/tmp/hipfire-integration-row65/summary.md`.
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1303.1 | 1285.6 | 1293.3 | 1293.3 |
+| 4B MQ4 decode tok/s | 140.9 | 141.5 | 140.8 | 140.5 | 140.8 |
+
+### Decision
+
+- Pipeline parallelism and DFlash remain available independently, while the
+  unimplemented combined path now fails closed before either model is loaded.
+- The live daemon no longer exposes the experimental `HIPFIRE_PP_DFLASH`
+  refusal bypass; historical design records remain intact as audit evidence.
+- Full CPU and GPU0 gates pass. Medians change +0.56%/+0.36% from M23 and
+  remain +5.38%/-0.07% versus the committed floor, so no five-run expansion
+  was required.
+- Generated outputs were manually reviewed; standard and DFlash/DDTree output
+  is on-topic and non-looping, all speculative detectors are clean, and
+  agentic reports zero hard failures and zero soft warnings. The standard 9B
+  reasoning sample ends at its fixed token cap while remaining coherent.
+- Decision: accept row 65 as a control-plane convergence change with explicit
+  fail-closed coverage, MIT-boundary checks, and performance non-regression
+  evidence.

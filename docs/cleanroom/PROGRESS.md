@@ -1226,3 +1226,38 @@ The conservative direction-table position is now complete through row 64 of
 2706; row 65 is next. The remaining direction count is 2642. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M24 evidence
+
+### Fail-closed PP/DFlash convergence
+
+Direction row 65 is a convergence milestone. Independent inspection of the
+MIT-derived daemon found that `HIPFIRE_PP_DFLASH=1` could bypass the loader's
+single-GPU DFlash refusal even though pipeline-parallel model loading does not
+own the draft model and multi-device generation does not coordinate draft and
+target execution. Accepting that combination therefore created a model state
+whose requested speculative path could not run.
+
+Commit `4239b52` removes the live bypass and rejects `pp > 1` with a draft
+model before loading either model. Pipeline parallelism without a draft and
+single-GPU DFlash remain unchanged. A pure truth-table test pins those three
+cases, and a static integration audit prevents the bypass from returning while
+requiring the explicit operator diagnostic. Historical PRD references remain
+untouched as clean-room research evidence.
+
+The full workspace, MIT checks, eleven-cell quant parity, standard coherence,
+four DFlash/DDTree cells, and Qwen3.6 27B agentic cell pass on GPU0. Manual
+review found on-topic non-looping output, clean speculative detectors, valid
+tool-call JSON, and zero agentic warnings. The standard 9B reasoning sample is
+coherent but ends at the fixed 192-token limit, matching the prior milestone's
+bounded-test behavior.
+
+Three fresh performance processes measure 1,303.1, 1,285.6, and 1,293.3
+prefill tok/s and 141.5, 140.8, and 140.5 decode tok/s. Medians are 1,293.3
+and 140.8 tok/s, changing by +0.56% and +0.36% from M23, so no five-run
+expansion was required.
+
+The conservative direction-table position is now complete through row 65 of
+2706; row 66 is next. The remaining direction count is 2641. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.
