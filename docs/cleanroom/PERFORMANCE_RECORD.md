@@ -2274,3 +2274,55 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
 - Decision: accept row 65 as a control-plane convergence change with explicit
   fail-closed coverage, MIT-boundary checks, and performance non-regression
   evidence.
+
+---
+
+## M25: fail-closed PP/PFlash convergence — 2026-08-11
+
+### Run identity
+
+- Regression parent: `0c9a876162a4063312d002e3ed07258a66a6166a`.
+- Candidate commit: `1eb7426cc5e490e0a6523846d550851ce11113f6`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Daemon SHA-256: `e19fd4b1dc795287c643e448dd537c8afdbc18b570edd9979439564d10ae8967`.
+- Environment reference SHA-256: `8c8d283a97975fb766c15cff8314b89fb59305a7d2a004bc2324ec816de27841`.
+- PP/PFlash audit SHA-256: `7dd96ca5e97eb0e478dede167b2635e786e2f11fc9a89a3922ce57bcbf3c4f81`.
+- Integration gate SHA-256: `6df3347c1c58261176b95c2a058cd280a8b3c5df074832db23ca834e488d6a8a`.
+- Candidate diff SHA-256: `336d63e621fea11f7ba44c1f29a2d867a5e4c0893f306c3619f447b3180b75e6`.
+- Reports md5: quant `117bd27bc74f2b9a5a3e0d322fbdbd5b`, standard
+  `e51d7c6bcba3fbd1e2158447946cb8bb`, DFlash
+  `1433a223aacabbbac56b0686ad4009fb`, agentic
+  `edfe5d2481b4a5f20b83d12501aa3695`.
+- Full gate: `/tmp/hipfire-integration-row66/summary.md`.
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1275.9 | 1262.1 | 1270.3 | 1270.3 |
+| 4B MQ4 decode tok/s | 140.9 | 140.6 | 139.8 | 139.8 | 139.8 |
+
+### Decision
+
+- Pipeline parallelism and PFlash remain available independently, while the
+  experimental combined path now fails closed before target allocation.
+- The live daemon and canonical operator reference no longer expose
+  `HIPFIRE_PP_PFLASH`; historical PRDs remain intact as audit evidence.
+- A supplemental single-GPU PFlash run used the available 27B MQ4 target and
+  0.8B MQ4 drafter. All twelve actual quality verdicts were PASS, and all six
+  PFlash-mode timings stayed within the historical ten-percent band. The
+  script's six mechanical regressions came only from baseline-mode verdict
+  improvements or MQ4/MQ3 timing differences; the MQ3 baseline was unchanged.
+- Full CPU and GPU0 gates pass. Medians change -1.78%/-0.71% from M24 and
+  remain +3.50%/-0.78% versus the committed floor, so no five-run expansion
+  was required.
+- Generated outputs were manually reviewed; standard and DFlash/DDTree output
+  is on-topic and non-looping, all speculative detectors are clean, and
+  agentic reports zero hard failures and zero soft warnings. The bounded 9B
+  standard reasoning sample remains in its reasoning span without a visible
+  final answer, so it is recorded as a quality limitation rather than a
+  correctness claim.
+- Decision: accept row 66 as a control-plane and operator-surface convergence
+  change with fail-closed coverage, single-GPU PFlash evidence, MIT-boundary
+  checks, and performance non-regression evidence.

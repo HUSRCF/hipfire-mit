@@ -1261,3 +1261,48 @@ The conservative direction-table position is now complete through row 65 of
 2706; row 66 is next. The remaining direction count is 2641. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M25 evidence
+
+### Fail-closed PP/PFlash convergence
+
+Direction row 66 completes the adjacent convergence audit. The live daemon
+documented pipeline-parallel generation as refusing PFlash, yet an operator
+could set `HIPFIRE_PP_PFLASH=1` to bypass that stable boundary. The PoC then
+loaded a single-device drafter beside the device-zero portion of a multi-device
+target without a validated resource-capacity or parity contract. That opt-in
+surface exposed an experimental combination as though it were operationally
+supported.
+
+Commit `1eb7426` removes the live bypass and its canonical environment-variable
+entry. It rejects `pp > 1` when either a PFlash drafter or a non-off compression
+mode is requested, before target allocation. PP without PFlash and single-GPU
+PFlash are unchanged. A five-case truth-table test and a static integration
+audit pin the stable boundary and explicit diagnostic. Historical PRDs remain
+unchanged as clean-room research evidence.
+
+The historical PFlash timing record requires an unavailable 27B MQ3 target.
+A supplemental GPU0 run therefore used the installed 27B MQ4 target and 0.8B
+MQ4 drafter. All twelve actual quality verdicts were PASS, including all six
+PFlash cases. Every PFlash-mode timing remained within the historical
+ten-percent band. Six mechanical regression labels came only from baseline
+mode: four historical FAIL verdicts improved to PASS and two MQ4 timings were
+more than ten percent faster than the MQ3 record. Cross-format absolute timing
+is not accepted as a performance comparison, and the baseline was not changed.
+
+The full workspace, MIT checks, eleven-cell quant parity, standard coherence,
+four DFlash/DDTree cells, and Qwen3.6 27B agentic cell pass on GPU0. Manual
+review found on-topic non-looping output, clean speculative detectors, valid
+tool-call JSON, and zero agentic warnings. The bounded 9B standard reasoning
+sample remains in its reasoning span without a visible final answer; this is
+retained as an explicit quality limitation rather than claimed as correct.
+
+Three fresh performance processes measure 1,275.9, 1,262.1, and 1,270.3
+prefill tok/s and 140.6, 139.8, and 139.8 decode tok/s. Medians are 1,270.3
+and 139.8 tok/s, changing by -1.78% and -0.71% from M24, so no five-run
+expansion was required.
+
+The conservative direction-table position is now complete through row 66 of
+2706; row 67 is next. The remaining direction count is 2640. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.
