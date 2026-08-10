@@ -27,6 +27,7 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M11: speculative seed-repeat embedding | 52 | complete | exact Q8 seed-plus-mask block embedding in one GPU launch, shared by all DFlash/DDTree draft paths |
 | M12: packed KV footprint record | 53 | complete | deterministic four-format capacity records derived from the checked allocation contract |
 | M13: generic batched target verify | 54 | complete | one shared batched target verification call with reusable scratch and greedy-state parity |
+| M14: hybrid-aware daemon KV allocation | 55 | complete | production Q8/default-Asym3 caches allocate full storage only for FullAttention layers |
 
 ## M0 evidence
 
@@ -901,5 +902,49 @@ W7900 floor they change by +5.57% and -0.14%.
 
 The conservative direction-table position is now complete through row 54 of
 2706; row 55 is next. The remaining direction count is 2652. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.
+
+## M14 evidence
+
+### FullAttention-only production KV allocation
+
+Direction row 55 extends the context path to reduce state capacity and
+movement while preserving numerical continuity. Qwen3.5 hybrid models keep
+recurrent state for LinearAttention layers and use the packed KV cache only in
+FullAttention layers. Although checked capped+filtered Q8 and Asym3
+constructors already existed, the single-GPU production daemon still invoked
+their unfiltered counterparts and allocated full K/V buffers for every layer.
+
+Commit `0098b82` derives an absolute-layer boolean mask from the loaded model
+configuration and routes the reference Q8 and default Asym3 modes through the
+capped+filtered constructors. FullAttention buffers retain exactly the same
+layout, physical capacity, rotation parameters, and absolute layer indices.
+Each non-KV layer receives two one-F32 placeholders, so downstream absolute
+indexing is unchanged and no KV kernel can consume a different numeric value.
+
+For the canonical 64-layer hybrid shape with 16 FullAttention layers, four KV
+heads, `head_dim=256`, and physical capacity 2,048, allocation-derived records
+give 272.0 MiB Q8 or 186.0 MiB Asym3 when all 64 layers receive buffers. The
+filtered production path uses 68.0 MiB or 46.5 MiB plus 384 bytes of
+placeholders, reducing the cache allocation by approximately 75% (204.0 MiB
+Q8 or 139.5 MiB Asym3 at this capacity).
+
+A static audit pins mask derivation, both filtered constructor calls, shared
+checked allocation, and absence of the unfiltered primary constructors. The
+full locked workspace all-target suite, workspace examples, clean-room
+audits, eleven-cell quant parity battery, four available standard coherence
+cells, four DFlash/DDTree cells, and the Qwen3.6 27B agentic cell pass on
+GPU0. Manual review found coherent bounded output, valid tool-call JSON, and
+no speculative or agentic warning.
+
+Three fresh GPU0 performance processes measure 1,299.1, 1,275.3, and 1,302.9
+prefill tok/s and 140.9, 140.5, and 140.0 decode tok/s. Their medians are
+1,299.1 and 140.5 tok/s. Relative to M13 they change by +0.27% and -0.14%, so
+the 5% cross-batch expansion rule did not fire. Relative to the committed
+W7900 floor they change by +5.85% and -0.28%.
+
+The conservative direction-table position is now complete through row 55 of
+2706; row 56 is next. The remaining direction count is 2651. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.

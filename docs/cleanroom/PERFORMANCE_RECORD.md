@@ -1734,3 +1734,75 @@ include both K and V plus the exact F32-storage rounding used by constructors.
   pair is absent; this is not counted as passing coverage.
 - Decision: accept row 54 as a distribution-preserving reduction of generic
   target verification calls with full GPU0 non-regression evidence.
+
+---
+
+## M14: hybrid-aware daemon KV allocation — 2026-08-10
+
+### Run identity
+
+- Regression parent: `44e50b13024a63c61bf526d52239c9c5b460393a`.
+- Candidate commit: `0098b82`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Daemon source SHA-256:
+  `4e92aacb005a7b179a068273c9e9798128daabc5db654617dfada9f87308587f`.
+- Static audit SHA-256:
+  `d1fb0b2f2080fcff9d0952088d9e3994f50ec0dcc8f057b7609b398e8dab476f`.
+- Candidate commit diff SHA-256:
+  `a32536b5dc1c791ff381404b88c559707e69c7ce5b701e34e071b4a263bb8ed2`.
+- Final quant report md5: `6b06e5f7ca0c7bba904102fe759d8f6a`.
+- Final standard-coherence report md5: `28b3900868fcc1958b21ff666e185825`.
+- Final DFlash report md5: `129ad1f27c0e1e10dd5ab687a6f85328`.
+- Final agentic report md5: `5347fb2b3eb7641e1c567a1f7ec98edc`.
+- Environment: GPU0-only ROCr/HIP visibility, ROCm 7.14 library path,
+  local read-only model directory, W7900 baseline selection, explicit
+  speed-gate DPM warm-up, and per-child GPU-lock serialization.
+- Full command: `./scripts/cleanroom-integration-gate.sh --speed-runs 3
+  --out /tmp/hipfire-integration-row55` under the recorded environment.
+- Machine manifest: `/tmp/hipfire-integration-row55/summary.md`.
+
+### Canonical hybrid allocation
+
+The allocation-derived comparison uses 64 total layers, 16 FullAttention
+layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
+
+| Format | All-layer allocation | Filtered full buffers | Placeholders | Reduction |
+|---|---:|---:|---:|---:|
+| Q8 | 272.0 MiB | 68.0 MiB | 384 B | ~75% |
+| Asym3 | 186.0 MiB | 46.5 MiB | 384 B | ~75% |
+
+### GPU measurements
+
+| Metric | Committed floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1299.1 | 1275.3 | 1302.9 | 1299.1 |
+| 4B MQ4 decode tok/s | 140.9 | 140.9 | 140.5 | 140.0 | 140.5 |
+
+### Decision
+
+- The production single-GPU Q8 and default Asym3 paths allocate full K/V
+  buffers only for model-declared FullAttention layers. LinearAttention layer
+  indices remain present as one-element placeholders.
+- KV-bearing buffers retain the same checked layout, capacity, rotation
+  parameters, and kernel strides; the change does not alter stored values.
+- GPU medians change by +5.85% prefill and -0.28% decode versus the committed
+  W7900 floor. Relative to M13 they change by +0.27% and -0.14%, so no
+  five-run expansion was required.
+- Full locked workspace all-target tests, workspace examples, all static
+  audits including hybrid-KV allocation, and clean-room source/license gates
+  pass. Unified GPU0 quant parity passes all 11 cases.
+- Four available standard coherence cells pass after manual review. The 9B
+  reasoning sample reaches its short-mode bound after deriving the correct
+  answer; the capital answer, one-line function, and tool call are complete.
+  Report: `/tmp/hipfire-integration-row55/coherence.md`.
+- All four DFlash/DDTree cells report `ok=true` and `soft_warn=false`; prose
+  and code outputs were manually reviewed. Report:
+  `/tmp/hipfire-integration-row55/coherence-dflash.md`.
+- The Qwen3.6 27B agentic cell emits valid `name='read'` JSON with zero hard
+  failures and zero soft warnings. Report:
+  `/tmp/hipfire-integration-row55/agentic.md`.
+- PFlash remains explicitly skipped because the required local target/drafter
+  pair is absent; this is not counted as passing coverage.
+- Decision: accept row 55 as a production context-capacity reduction with
+  unchanged KV numerical representation and full GPU0 non-regression evidence.
