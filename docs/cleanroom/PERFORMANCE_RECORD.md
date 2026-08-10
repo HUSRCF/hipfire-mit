@@ -775,3 +775,62 @@ decode tok/s.
 - Decision: accept common-loader support and a portable numerical oracle for
   MQ6-G256 as the seventh M3 deliverable. The remaining registered formats
   and model-level quality milestones stay open.
+
+---
+
+## M3: compact HFQ and MQ2-Lloyd parity closure — 2026-08-10
+
+### Run identity
+
+- Regression parent: `9061dc936e839d56f56b3f8cd3b652f174380def`.
+- Candidate commit: `73be35f32d3ab833b2bc058636fffa0b7374cd3c`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Candidate benchmark md5: `2225075fb69cda29d06034e64982296b`.
+- Candidate daemon md5: `dbc7a5fdf00c9038992933f29696150b`.
+- Candidate DFlash md5: `fe1ee567a4b1ab04363090f8bb15696d`.
+- Compact-format anchor md5: `a9d8b6dcb8a712e581bf08b20d7c0e66`.
+- Environment: GPU0-only visibility and the same ROCm 7.14 library,
+  model-directory, W7900 baseline, and `scripts/gpu-lock.sh` serialization
+  used by the preceding M3 runs.
+- Correctness commands: `cargo test -p hipfire-runtime --lib`,
+  `cargo check -p hipfire-runtime --examples --features deltanet`,
+  `./scripts/cleanroom-gate.sh`, `./scripts/quant-parity-gate.sh`,
+  `./scripts/coherence-gate.sh`, and `./scripts/coherence-gate-dflash.sh`.
+- Performance command: three fresh invocations of
+  `./scripts/speed-gate.sh --fast`; each observation is best-of-two.
+
+### Measurements
+
+| Metric | Committed floor | Candidate observation 1 | Candidate observation 2 | Candidate observation 3 | Candidate median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1304.4 | 1307.0 | 1289.6 | 1304.4 |
+| 4B MQ4 decode tok/s | 140.9 | 140.3 | 139.9 | 139.2 | 139.9 |
+
+The commit-hook repetition also passed at 1287.5 prefill tok/s and 140.6
+decode tok/s.
+
+### Decision
+
+- Candidate median delta: +6.28% prefill and -0.71% decode. All observations
+  pass the committed regression tolerance. Benchmark, daemon, and DFlash
+  hashes are unchanged from the preceding implementation batch, so no
+  implementation-caused speedup is claimed.
+- New compact-format maximum errors through K=1024 are `8.544922e-4`
+  (HFQ4-G128), `8.544922e-4` (HFQ2-G256), `7.324219e-4`
+  (HFQ2-G128), `1.464844e-3` (HFQ3-G128), and `3.814697e-5`
+  (MQ2-G256-Lloyd), all below the anchor's `2e-3` limit.
+- Unified GPU0 parity: all ten cases pass. Reports:
+  `/tmp/quant-parity-compact.md` and commit-hook repetition
+  `/tmp/quant-parity-20260810-101112.md`.
+- Standard GPU0 coherence: four available cells pass after manual review.
+  Reports: `/tmp/coherence-compact.md` and commit-hook repetition
+  `/tmp/coherence-20260810-101115.md`.
+- DFlash/DDTree GPU0 coherence: all four cells report `ok=true` and
+  `soft_warn=false`; outputs were manually reviewed. Report:
+  `/tmp/coherence-dflash-20260810-100827.md`.
+- Agentic commit-hook quality: Qwen3.6 27B emits valid `name='read'` JSON with
+  zero warnings. Report: `/tmp/agentic-gate-20260810-101131.md`.
+- Decision: accept independent parity for the remaining compact HFQ GEMV and
+  MQ2-Lloyd paths as the eighth M3 deliverable. Model-level format quality and
+  unexercised fused/batched variants remain open.

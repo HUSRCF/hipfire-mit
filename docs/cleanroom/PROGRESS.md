@@ -16,7 +16,7 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M0: governance and reproducibility | 1-2 | complete | MIT/source gate, clean-room PR declaration, build and performance baselines |
 | M1: speculative decode foundation | 3-8 | complete | shared greedy acceptance contract, semantic statistics, deterministic tests, and GPU0 correctness/throughput acceptance |
 | M2: release and device execution | 10-18 | in progress | reproducible delivery and the device-execution foundation are complete; remaining quantization, maintenance, and integration directions are still open |
-| M3: quantization and context paths | 19-39 | in progress | strict HFQ boundaries and quant-payload layouts, nine-cell GPU/CPU quant parity gating, shared packed-KV allocation, and checked long-context position continuity are complete; full model-level format fidelity remains open |
+| M3: quantization and context paths | 19-39 | in progress | strict HFQ boundaries and quant-payload layouts, ten-cell GPU/CPU quant parity gating, shared packed-KV allocation, and checked long-context position continuity are complete; full model-level format fidelity remains open |
 
 ## M0 evidence
 
@@ -357,3 +357,28 @@ the committed W7900 floor; the hook repetition also passes. This records
 non-regression only, because the change activates an existing MQ6 execution
 path rather than altering its kernel. Detailed evidence is in
 `docs/cleanroom/PERFORMANCE_RECORD.md`.
+
+### Compact HFQ and MQ2-Lloyd parity closure
+
+Commit `73be35f32d3ab833b2bc058636fffa0b7374cd3c` expands the mandatory
+quantization gate from nine to ten cells and closes five remaining registered
+GEMV evidence gaps without requiring model files. The new synthetic anchor
+constructs and independently decodes HFQ4-G128, HFQ2-G256, HFQ2-G128, and
+HFQ3-G128 payloads, plus an MQ2-G256-Lloyd codebook payload with CPU FWHT
+rotation. It sweeps K=256, 512, and 1024 for every format.
+
+All 15 new GPU0 comparisons pass. The largest absolute error is
+`1.464844e-3` for HFQ3-G128 at K=1024, below the fixed `2e-3` threshold;
+MQ2-Lloyd remains at or below `3.814697e-5`. The complete ten-cell parity
+battery, all 183 runtime library tests, every DeltaNet runtime example, and
+the clean-room license gate pass. Standard coherence and all four
+DFlash/DDTree cells pass after manual review; every speculative detector is
+`ok=true` with `soft_warn=false`. The Qwen3.6 27B agentic hook cell also
+passes with valid tool JSON and no warnings.
+
+Three fresh performance observations have median 1304.4 prefill tok/s and
+139.9 decode tok/s, respectively +6.28% and -0.71% versus the committed
+W7900 floor; the hook repetition also passes. The inference executable hashes
+are unchanged because this batch adds only a numerical test, so the values
+establish non-regression and no speedup is attributed. Detailed evidence is
+in `docs/cleanroom/PERFORMANCE_RECORD.md`.
