@@ -115,5 +115,8 @@ mod tests {
         assert_eq!(Llama::protocol_label(0), Some("qwen3"));
         assert_eq!(Llama::protocol_label(1), Some("qwen3"));
         assert_eq!(Llama::protocol_label(0xFF), None);
+        assert_eq!(Llama::is_moe_arch_id(0), Some(false));
+        assert_eq!(Llama::is_moe_arch_id(1), Some(false));
+        assert_eq!(Llama::is_moe_arch_id(0xFF), None);
     }
 }

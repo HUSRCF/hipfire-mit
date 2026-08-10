@@ -114,6 +114,14 @@ pub trait Architecture: Send + 'static {
         Self::supports_arch_id(arch_id).then_some(Self::name())
     }
 
+    /// Classify a supported family member as dense (`Some(false)`) or MoE
+    /// (`Some(true)`). Unsupported identifiers return `None`. The dense
+    /// default fits single-id dense adapters; MoE families override it.
+    #[inline]
+    fn is_moe_arch_id(arch_id: u32) -> Option<bool> {
+        Self::supports_arch_id(arch_id).then_some(false)
+    }
+
     /// Parse model-shape constants out of `hfq.metadata_json`.
     ///
     /// Returns a typed `Config` or an error string. Implementations

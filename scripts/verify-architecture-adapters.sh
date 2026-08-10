@@ -28,6 +28,11 @@ do
     fi
 done
 
+if ! rg -q 'fn is_moe_arch_id\(' crates/hipfire-arch-qwen35/src/arch.rs; then
+    echo "architecture adapter audit: Qwen3.5 adapter does not own dense/MoE variants" >&2
+    exit 1
+fi
+
 daemon=crates/hipfire-runtime/examples/daemon.rs
 if ! rg -q 'adapter_family\(hfq\.arch_id\)\?' "$daemon"; then
     echo "architecture adapter audit: daemon load path bypasses adapter selection" >&2
@@ -36,6 +41,15 @@ fi
 
 if rg -n 'if hfq\.arch_id (== 5 \|\||!= 5 &&)' "$daemon"; then
     echo "architecture adapter audit: daemon duplicated Qwen family membership" >&2
+    exit 1
+fi
+
+if rg -n 'hfq\.arch_id == 5' "$daemon"; then
+    echo "architecture adapter audit: daemon duplicated Qwen dense-variant ownership" >&2
+    exit 1
+fi
+if ! rg -q '<Qwen35 as Architecture>::is_moe_arch_id\(hfq\.arch_id\)' "$daemon"; then
+    echo "architecture adapter audit: daemon bypasses adapter variant ownership" >&2
     exit 1
 fi
 

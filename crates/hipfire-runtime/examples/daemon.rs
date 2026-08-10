@@ -1534,7 +1534,8 @@ fn load_model(path: &str, max_seq: usize, draft_path: Option<&str>, kv_mode_over
         //     104-vs-136 byte stride. (Future: wire MQ3 into the MoE
         //     batched branches and the MoE FFN expert kernels.)
         // MQ2 body still has no batched WMMA kernels anywhere.
-        let arch_is_dense_qwen35 = hfq.arch_id == 5;
+        let arch_is_dense_qwen35 =
+            <Qwen35 as Architecture>::is_moe_arch_id(hfq.arch_id) == Some(false);
         let mq3_supported = arch_is_gfx11 && arch_is_dense_qwen35;
         let mq_unsupported = hfq.first_tensor_with_quant_type(18).map(|n| ("MQ2 (qt=18)", n));
         let mq_unsupported = mq_unsupported.or_else(|| {
