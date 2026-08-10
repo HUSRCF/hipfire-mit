@@ -3650,30 +3650,6 @@ pub fn forward_prefill_batch_single_chunk_captured(
         )));
     }
 
-    // Capture-mode contract: under hipStreamBeginCapture, the FA branch
-    // bakes max_ctx_len = kv_cache.physical_cap (kernels read seq_len
-    // per-row from a device buffer, but LDS is sized from this scalar).
-    // For Q8 KV at physical_cap > 15000, the FA path enters the per-
-    // position long-context fallback, which issues hip.malloc + per-row
-    // memcpy_htod inside the layer loop. Both are capture-illegal — they
-    // would either error at capture time or bake stale host bytes into
-    // the kernarg blob. Asym2/3/4 KV use pure-batched flash kernels and
-    // stay capture-safe at any context length, so reject only this exact
-    // combination here.
-    const LDS_CTX_LIMIT: usize = 15000;
-    if kv_cache.quant_q8 && !(kv_cache.quant_asym2 || kv_cache.quant_asym3 || kv_cache.quant_asym4)
-        && kv_cache.physical_cap > LDS_CTX_LIMIT
-    {
-        return Err(hip_bridge::HipError::new(0, &format!(
-            "forward_prefill_batch_single_chunk_captured: Q8 KV with \
-             physical_cap {} > {} hits the per-position long-context \
-             fallback, which issues hip.malloc + memcpy_htod inside the \
-             captured region. Use asym3 KV for capture at long context, \
-             or shrink physical_cap.",
-            kv_cache.physical_cap, LDS_CTX_LIMIT,
-        )));
-    }
-
     forward_prefill_chunk(
         gpu, weights, config, tokens, start_pos,
         kv_cache, dn_state, scratch, pbs, hidden_rb,
@@ -5979,7 +5955,9 @@ fn forward_prefill_chunk(
         } else {
             // Legacy path: only last-token logits.
             let last = n - 1;
-            gpu.hip.memcpy_dtod_at(&s.x.buf, 0, &pbs.x_batch.buf, last * dim_row_bytes, dim_row_bytes)?;
+            gpu.memcpy_dtod_at_auto(
+                &s.x.buf, 0, &pbs.x_batch.buf, last * dim_row_bytes, dim_row_bytes,
+            )?;
             gpu.rmsnorm_f32(&s.x, &weights.output_norm, &s.tmp, config.norm_eps)?;
             weight_gemv(gpu, &weights.output, &s.tmp, &s.logits)?;
         }

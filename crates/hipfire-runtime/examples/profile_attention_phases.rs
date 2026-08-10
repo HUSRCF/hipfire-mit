@@ -32,6 +32,7 @@ struct LongContextQ8Record<'a> {
     prefill_ms: f64,
     sequence_length: usize,
     phase_repeats: usize,
+    captured_prefill_blobs: Option<usize>,
     reference_attention_us: f64,
     flash_attention_us: f64,
     flash_speedup: f64,
@@ -43,7 +44,7 @@ struct LongContextQ8Record<'a> {
 #[cfg(feature = "deltanet")]
 fn main() {
     use hipfire_runtime::hfq::HfqFile;
-    use hipfire_arch_qwen35::qwen35::{self, DeltaNetState, Qwen35Scratch};
+    use hipfire_arch_qwen35::qwen35::{self, DeltaNetState, PrefillBatchScratch, Qwen35Scratch};
     use hipfire_runtime::llama::{self, KvCache};
     use rdna_compute::{DType};
     use std::path::Path;
@@ -59,12 +60,14 @@ fn main() {
     let mut prefill_len: usize = 4096;
     let mut repeats: usize = 20;
     let mut record_path: Option<String> = None;
+    let mut capture_prefill_probe = false;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
             "--prefill" => { prefill_len = args[i + 1].parse().unwrap(); i += 2; }
             "--repeats" => { repeats = args[i + 1].parse().unwrap(); i += 2; }
             "--record" => { record_path = Some(args[i + 1].clone()); i += 2; }
+            "--capture-prefill-probe" => { capture_prefill_probe = true; i += 1; }
             other => { eprintln!("unknown arg: {other}"); std::process::exit(1); }
         }
     }
@@ -115,6 +118,40 @@ fn main() {
     ).expect("prefill failed");
     let prefill_ms = t_prefill.elapsed().as_secs_f64() * 1000.0;
     eprintln!("  prefill: {prefill_ms:.1}ms");
+
+    let captured_prefill_blobs = if capture_prefill_probe {
+        let probe_tokens = [1u32, 2u32];
+        let probe_start = prefill_len;
+        let pbs = PrefillBatchScratch::new(&mut gpu, &config, probe_tokens.len())
+            .expect("allocate captured-prefill probe scratch");
+        qwen35::upload_prefill_batch_inputs(&mut gpu, &pbs, &probe_tokens, probe_start)
+            .expect("upload captured-prefill probe inputs");
+        if gpu.active_stream.is_none() {
+            gpu.active_stream = Some(gpu.hip.stream_create().expect("create capture stream"));
+        }
+        qwen35::forward_prefill_batch_single_chunk_captured(
+            &mut gpu, &weights, &config, &probe_tokens, probe_start,
+            &mut kv_cache, &mut dn_state, &scratch, &pbs,
+            None, None, None, None,
+        ).expect("warm captured-prefill probe kernels");
+        qwen35::upload_prefill_batch_inputs(&mut gpu, &pbs, &probe_tokens, probe_start)
+            .expect("refresh captured-prefill probe inputs");
+        gpu.begin_graph_capture().expect("begin captured-prefill probe");
+        qwen35::forward_prefill_batch_single_chunk_captured(
+            &mut gpu, &weights, &config, &probe_tokens, probe_start,
+            &mut kv_cache, &mut dn_state, &scratch, &pbs,
+            None, None, None, None,
+        ).expect("capture long-context Q8 prefill");
+        gpu.end_graph_capture().expect("end captured-prefill probe");
+        let blobs = gpu.capture_blobs.len();
+        gpu.graph_launch().expect("launch captured-prefill probe");
+        gpu.hip.device_synchronize().expect("synchronize captured-prefill probe");
+        gpu.graph_destroy();
+        eprintln!("captured-prefill probe: {blobs} blobs at start_pos={probe_start}");
+        Some(blobs)
+    } else {
+        None
+    };
 
     let logits = gpu.download_f32(&scratch.logits).unwrap();
     let mut next_token = llama::argmax(&logits);
@@ -360,6 +397,7 @@ fn main() {
             prefill_ms,
             sequence_length: seq_len,
             phase_repeats: repeats,
+            captured_prefill_blobs,
             reference_attention_us: v1_us,
             flash_attention_us: flash_us,
             flash_speedup: v1_us / flash_us,

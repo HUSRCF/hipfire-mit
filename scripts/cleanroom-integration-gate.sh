@@ -37,6 +37,7 @@ CPU_STEPS=(
     hybrid-kv-allocation-audit
     long-context-q8-position-audit
     long-context-q8-record-audit
+    qwen35-long-context-capture-audit
     generation-semantics-audit
     agentic-detector-self-check
     cleanroom-license
@@ -63,6 +64,7 @@ REQUIRED_SCRIPTS=(
     scripts/verify-hybrid-kv-allocation.sh
     scripts/verify-long-context-q8-position-reuse.sh
     scripts/verify-long-context-q8-record.sh
+    scripts/verify-qwen35-long-context-capture.sh
     scripts/verify-generation-semantics.sh
     scripts/verify-bind-thread.sh
 )
@@ -214,6 +216,7 @@ execute_step() {
         hybrid-kv-allocation-audit) ./scripts/verify-hybrid-kv-allocation.sh ;;
         long-context-q8-position-audit) ./scripts/verify-long-context-q8-position-reuse.sh ;;
         long-context-q8-record-audit) ./scripts/verify-long-context-q8-record.sh ;;
+        qwen35-long-context-capture-audit) ./scripts/verify-qwen35-long-context-capture.sh ;;
         generation-semantics-audit) ./scripts/verify-generation-semantics.sh ;;
         agentic-detector-self-check) ./scripts/agentic-gate.sh --self-check ;;
         cleanroom-license) ./scripts/cleanroom-gate.sh ;;
