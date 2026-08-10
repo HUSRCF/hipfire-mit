@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! hipfire-quantize: Quantize raw FP16/BF16/FP32 model weights to Q4_F16 format.
 //!
 //! Usage: hipfire-quantize --input <model_dir-or-gguf> --output <output.hfq> [--format mq4]
@@ -92,6 +93,31 @@ static LM_HEAD_FORMAT: OnceLock<GgufFormat> = OnceLock::new();
 // would be MQ4-quantized but NOT AWQ-scaled — runtime would read them as
 // AWQ-scaled and corrupt logits (0.67 → 13.5 KLD blowup, master-doc §6 rule 5).
 static LM_HEAD_AWQ_ENABLED: OnceLock<bool> = OnceLock::new();
+
+/// Architecture properties written into the HFQ header. Keep source-format
+/// aliases and variant capabilities in one cold-path contract so GGUF and
+/// Safetensors inputs cannot silently disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HfqArchitecture {
+    id: u32,
+    is_moe: bool,
+}
+
+impl HfqArchitecture {
+    fn from_source_name(name: &str) -> Result<Self, String> {
+        match name {
+            "llama" => Ok(Self { id: 0, is_moe: false }),
+            "qwen2" | "qwen3" => Ok(Self { id: 1, is_moe: false }),
+            "qwen3_5" | "qwen3_5_text" => Ok(Self { id: 5, is_moe: false }),
+            "qwen3moe" | "qwen3_5_moe" | "qwen3_5_moe_text" => {
+                Ok(Self { id: 6, is_moe: true })
+            }
+            other => Err(format!(
+                "unsupported model architecture '{other}'; refusing to tag it as a compatible HFQ family"
+            )),
+        }
+    }
+}
 
 // ─── Safetensors Parser ─────────────────────────────────────────────────────
 
@@ -3109,19 +3135,15 @@ fn run_gguf_pipeline(
     eprintln!("GGUF version: {}", gguf.version);
     eprintln!("Tensors: {}", gguf.tensors.len());
 
-    let arch_str = gguf
-        .meta_str("general.architecture")
-        .unwrap_or("llama")
-        .to_string();
-    let arch_id: u32 = match arch_str.as_str() {
-        "llama" => 0,
-        "qwen3" | "qwen2" => 1,
-        "qwen3moe" => 6,
-        other => {
-            eprintln!("warning: unknown GGUF architecture '{other}', tagging as llama-compatible");
-            0
-        }
-    };
+    let arch_str = gguf.meta_str("general.architecture").ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "GGUF metadata is missing required general.architecture",
+        )
+    })?.to_string();
+    let arch = HfqArchitecture::from_source_name(&arch_str)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let arch_id = arch.id;
     eprintln!("Architecture: {arch_str} (id={arch_id})");
 
     // Metadata JSON: must populate `config.*` so engine's `config_from_hfq`
@@ -3146,7 +3168,7 @@ fn run_gguf_pipeline(
     let signs2 = if needs_signs { gen_fwht_signs(1042, 256) } else { Vec::new() };
 
     // K-map setup for GGUF path
-    let is_moe = arch_id == 6;
+    let is_moe = arch.is_moe;
     let n_layers: usize = config_json
         .get("num_hidden_layers")
         .and_then(|v| v.as_u64())
@@ -3853,19 +3875,17 @@ fn main() {
         .unwrap_or_else(|_| panic!("Cannot read {}. If using a HuggingFace model ID, ensure it's downloaded: huggingface-cli download {}", config_path.display(), input_dir.display()));
     let config: serde_json::Value = serde_json::from_str(&config_str).unwrap();
 
-    let arch_str = config.get("model_type").and_then(|v| v.as_str()).unwrap_or("llama");
-    let arch_id = match arch_str {
-        "llama" => 0u32,
-        "qwen3" | "qwen2" => 1,
-        "qwen3_5" | "qwen3_5_text" => 5,
-        // Qwen3.5 MoE (Qwen3.5-35B-A3B and friends): hybrid LA+FA attention identical
-        // to qwen3_5 dense, but every layer's FFN is MoE with stacked-3D expert
-        // tensors (mlp.experts.gate_up_proj/down_proj are [num_experts, ...]).
-        "qwen3_5_moe" | "qwen3_5_moe_text" => 6,
-        other => { eprintln!("Warning: unknown architecture '{other}', treating as llama"); 0 }
-    };
+    let arch_str = config.get("model_type").and_then(|v| v.as_str()).unwrap_or_else(|| {
+        eprintln!("config.json is missing required model_type; refusing to tag it as LLaMA");
+        std::process::exit(2);
+    });
+    let arch = HfqArchitecture::from_source_name(arch_str).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(2);
+    });
+    let arch_id = arch.id;
     eprintln!("Architecture: {arch_str} (id={arch_id})");
-    let is_moe = arch_id == 6;
+    let is_moe = arch.is_moe;
     // Q8 router: always on for MoE models. 4-bit router quantization destroys
     // routing precision on precision-sensitive models (Qwen3.6-A3B: 152/256
     // expert rows drop below 0.99 cosine similarity at HFQ4G256). Cost: ~0.05%
@@ -5203,6 +5223,22 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hfq_architecture_contract_covers_supported_aliases() {
+        assert_eq!(HfqArchitecture::from_source_name("llama").unwrap(), HfqArchitecture { id: 0, is_moe: false });
+        assert_eq!(HfqArchitecture::from_source_name("qwen3").unwrap(), HfqArchitecture { id: 1, is_moe: false });
+        assert_eq!(HfqArchitecture::from_source_name("qwen3_5_text").unwrap(), HfqArchitecture { id: 5, is_moe: false });
+        assert_eq!(HfqArchitecture::from_source_name("qwen3_5_moe_text").unwrap(), HfqArchitecture { id: 6, is_moe: true });
+        assert_eq!(HfqArchitecture::from_source_name("qwen3moe").unwrap(), HfqArchitecture { id: 6, is_moe: true });
+    }
+
+    #[test]
+    fn hfq_architecture_contract_rejects_unknown_families() {
+        let error = HfqArchitecture::from_source_name("gemma4").unwrap_err();
+        assert!(error.contains("unsupported model architecture 'gemma4'"));
+        assert!(error.contains("refusing to tag"));
+    }
 
     /// Regression test for the 2026-05-14 GPTQ panic
     /// (`docs/plans/gptq_bug.md`). Two `TensorSpill::new` calls into the

@@ -29,6 +29,7 @@ CPU_STEPS=(
     workspace-examples
     bind-thread-audit
     architecture-adapter-audit
+    quantizer-architecture-audit
     adapter-config-family-audit
     hfq-consumer-shape-audit
     vision-bf16-contract-audit
@@ -61,6 +62,7 @@ REQUIRED_SCRIPTS=(
     scripts/quant-parity-gate.sh
     scripts/speed-gate.sh
     scripts/verify-architecture-adapters.sh
+    scripts/verify-quantizer-architecture-contract.sh
     scripts/verify-adapter-config-family.sh
     scripts/verify-hfq-consumer-shapes.sh
     scripts/verify-vision-bf16-contract.sh
@@ -218,6 +220,7 @@ execute_step() {
         workspace-examples) cargo check --workspace --locked --examples ;;
         bind-thread-audit) ./scripts/verify-bind-thread.sh ;;
         architecture-adapter-audit) ./scripts/verify-architecture-adapters.sh ;;
+        quantizer-architecture-audit) ./scripts/verify-quantizer-architecture-contract.sh ;;
         adapter-config-family-audit) ./scripts/verify-adapter-config-family.sh ;;
         hfq-consumer-shape-audit) ./scripts/verify-hfq-consumer-shapes.sh ;;
         vision-bf16-contract-audit) ./scripts/verify-vision-bf16-contract.sh ;;
