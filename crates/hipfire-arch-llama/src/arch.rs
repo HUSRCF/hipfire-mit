@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! `Architecture` trait implementation for the LLaMA family.
 //!
 //! Mirrors PR 8's qwen35 pattern. Bring-up triple (`config_from_hfq`,
@@ -39,6 +40,10 @@ impl Architecture for Llama {
         // so the bring-up triple does not need a separate marker
         // type per arch_id.
         0
+    }
+
+    fn supports_arch_id(arch_id: u32) -> bool {
+        matches!(arch_id, 0 | 1)
     }
 
     fn name() -> &'static str {
@@ -83,4 +88,17 @@ impl Architecture for Llama {
     // policy choices stay unchanged. Future PRs that consolidate
     // policy through the trait can populate these (LLaMA: no
     // strip_think, no Qwen-specific blocked tokens).
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adapter_owns_llama_and_plain_qwen_ids() {
+        assert!(Llama::supports_arch_id(0));
+        assert!(Llama::supports_arch_id(1));
+        assert!(!Llama::supports_arch_id(5));
+        assert!(!Llama::supports_arch_id(0xFF));
+    }
 }

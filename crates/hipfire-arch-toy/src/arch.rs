@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! `Architecture` trait impl for the toy arch — minimum-viable reference.
 //!
 //! This file is the *shape* a new arch's `arch.rs` should take: a
@@ -127,5 +128,7 @@ mod tests {
     fn toy_arch_id_is_reserved() {
         assert_eq!(Toy::arch_id(), 0xFF);
         assert_eq!(Toy::name(), "toy");
+        assert!(Toy::supports_arch_id(0xFF));
+        assert!(!Toy::supports_arch_id(0));
     }
 }

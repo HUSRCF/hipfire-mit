@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! `Architecture` trait implementation for Qwen3.5.
 //!
 //! This is the canary arch implementation (PR 8 of
@@ -53,6 +54,10 @@ impl Architecture for Qwen35 {
         5
     }
 
+    fn supports_arch_id(arch_id: u32) -> bool {
+        matches!(arch_id, 5 | 6)
+    }
+
     fn name() -> &'static str {
         "qwen35"
     }
@@ -80,4 +85,17 @@ impl Architecture for Qwen35 {
     // baseline. Qwen3.5 IS the canonical arch the trait was designed
     // around, so no overrides needed here. Future arches (gemma4, llama)
     // will exercise the override surface.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adapter_owns_dense_and_moe_family_ids() {
+        assert!(Qwen35::supports_arch_id(5));
+        assert!(Qwen35::supports_arch_id(6));
+        assert!(!Qwen35::supports_arch_id(0));
+        assert!(!Qwen35::supports_arch_id(0xFF));
+    }
 }

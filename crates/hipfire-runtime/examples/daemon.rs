@@ -19,15 +19,18 @@
 //!   ← {"type":"unloaded"}
 
 use hipfire_runtime::cask::CaskCtx;
+use hipfire_runtime::arch::Architecture;
 use hipfire_runtime::dflash::{DflashConfig, DflashScratch, DflashWeights};
 use hipfire_runtime::eos_filter::{EosFilter, EosFilterConfig, FilterAction};
 use hipfire_runtime::hfq::HfqFile;
 use hipfire_runtime::llama;
 use hipfire_runtime::multi_gpu::Gpus;
 use hipfire_arch_llama::Llama;
+use hipfire_arch_qwen35::Qwen35;
 use hipfire_arch_qwen35::qwen35;
 use hipfire_arch_qwen35::qwen35::{DeltaNetState, LayerType, Qwen35ScratchSet};
 use hipfire_arch_qwen35_vl::qwen35_vl;
+use hipfire_arch_qwen35_vl::Qwen35Vl;
 use hipfire_runtime::sampler::{self, SamplerConfig};
 use hipfire_runtime::tool_call::{
     required_empty_think_close, required_hermes_name_quote_prefix,
@@ -90,6 +93,70 @@ struct CaskConfig {
     beta: usize,
     core_frac: f32,
     fold_m: usize,
+}
+
+/// Cold-path adapter selection for an HFQ header architecture id.
+/// Forward execution remains statically dispatched after this one-time load
+/// decision; this enum never enters the token-generation hot path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdapterFamily {
+    Qwen35,
+    Llama,
+}
+
+fn adapter_family(arch_id: u32) -> Result<AdapterFamily, String> {
+    if <Qwen35 as Architecture>::supports_arch_id(arch_id) {
+        Ok(AdapterFamily::Qwen35)
+    } else if <Llama as Architecture>::supports_arch_id(arch_id) {
+        Ok(AdapterFamily::Llama)
+    } else {
+        Err(format!(
+            "unsupported HFQ arch_id={arch_id}; registered adapters: {}, {}",
+            <Qwen35 as Architecture>::name(),
+            <Llama as Architecture>::name(),
+        ))
+    }
+}
+
+fn model_arch_label(arch_id: u32) -> &'static str {
+    if arch_id == 6 && <Qwen35 as Architecture>::supports_arch_id(arch_id) {
+        "qwen3_5_moe"
+    } else if <Qwen35 as Architecture>::supports_arch_id(arch_id) {
+        "qwen3_5"
+    } else if <Llama as Architecture>::supports_arch_id(arch_id) {
+        // Preserve the existing daemon protocol family label for ids 0/1.
+        "qwen3"
+    } else {
+        "unknown"
+    }
+}
+
+#[cfg(test)]
+mod adapter_family_tests {
+    use super::*;
+
+    #[test]
+    fn registered_ids_route_to_their_owning_adapter() {
+        assert_eq!(adapter_family(0), Ok(AdapterFamily::Llama));
+        assert_eq!(adapter_family(1), Ok(AdapterFamily::Llama));
+        assert_eq!(adapter_family(5), Ok(AdapterFamily::Qwen35));
+        assert_eq!(adapter_family(6), Ok(AdapterFamily::Qwen35));
+    }
+
+    #[test]
+    fn unknown_ids_fail_closed_instead_of_falling_back_to_llama() {
+        let error = adapter_family(0xFF).unwrap_err();
+        assert!(error.contains("unsupported HFQ arch_id=255"));
+        assert_eq!(model_arch_label(0xFF), "unknown");
+    }
+
+    #[test]
+    fn protocol_labels_remain_compatible() {
+        assert_eq!(model_arch_label(0), "qwen3");
+        assert_eq!(model_arch_label(1), "qwen3");
+        assert_eq!(model_arch_label(5), "qwen3_5");
+        assert_eq!(model_arch_label(6), "qwen3_5_moe");
+    }
 }
 
 /// Acquire a machine-wide exclusive lock on ~/.hipfire/daemon.pid.
@@ -672,11 +739,7 @@ fn main() {
 
                 match load_model(path, max_seq, draft_path.as_deref(), kv_mode_override.as_deref(), state_quant_override.as_deref(), &cask, pp, &mut gpu) {
                     Ok(m) => {
-                        let arch = match m.arch_id {
-                            5 => "qwen3_5",
-                            6 => "qwen3_5_moe",
-                            _ => "qwen3",
-                        };
+                        let arch = model_arch_label(m.arch_id);
                         let vl = m.vision_config.is_some();
                         let (dim, layers, vocab) = if let Some(ref c) = m.q35_config {
                             (c.dim, c.n_layers, c.vocab_size)
@@ -1081,11 +1144,9 @@ fn main() {
                 let (vram_free, vram_total) = gpu.hip.get_vram_info().unwrap_or((0, 0));
                 let hip_ver = gpu.hip.runtime_version().unwrap_or((0, 0));
                 let has_model = model.is_some();
-                let model_arch = model.as_ref().map(|m| match m.arch_id {
-                    5 => "qwen3_5",
-                    6 => "qwen3_5_moe",
-                    _ => "qwen3",
-                }).unwrap_or("none");
+                let model_arch = model.as_ref()
+                    .map(|m| model_arch_label(m.arch_id))
+                    .unwrap_or("none");
                 // Count pre-compiled kernels
                 let kernel_dir = std::env::current_exe().ok()
                     .and_then(|e| e.parent().map(|p| p.join("kernels").join("compiled").join(&gpu.arch)))
@@ -1163,7 +1224,7 @@ fn main() {
                 // completion (kernel launches are async by default).
                 let _ = gpu.hip.device_synchronize();
                 let t0 = Instant::now();
-                let run_ok = if m.arch_id == 5 || m.arch_id == 6 {
+                let run_ok = if <Qwen35 as Architecture>::supports_arch_id(m.arch_id) {
                     let config = m.q35_config.as_ref().unwrap();
                     let weights = m.q35_weights.as_ref().unwrap();
                     let scratch = m.q35_scratch.as_ref().unwrap();
@@ -1368,6 +1429,7 @@ fn load_model(path: &str, max_seq: usize, draft_path: Option<&str>, kv_mode_over
         .map(|s| s.to_string())
         .unwrap_or_else(|| std::env::var("HIPFIRE_KV_MODE").unwrap_or_default());
     let mut hfq = HfqFile::open(Path::new(path)).map_err(|e| format!("{e}"))?;
+    let adapter = adapter_family(hfq.arch_id)?;
     let tokenizer = hipfire_runtime::tokenizer::Tokenizer::from_hfq_metadata(&hfq.metadata_json)
         .ok_or("tokenizer not found")?;
 
@@ -1494,15 +1556,12 @@ fn load_model(path: &str, max_seq: usize, draft_path: Option<&str>, kv_mode_over
         max_seq
     };
 
-    if hfq.arch_id == 5 || hfq.arch_id == 6 {
+    if adapter == AdapterFamily::Qwen35 {
         // Qwen3.5 DeltaNet (arch=5 dense, arch=6 MoE/A3B). PR 8: dispatch
         // through the `Architecture` trait for the bring-up triple
         // (config → load → state). Forward passes below still call
         // `qwen35::*` directly — see crates/hipfire-arch-qwen35/src/arch.rs
         // for why static dispatch wins for the hot path.
-        use hipfire_runtime::arch::Architecture;
-        use hipfire_arch_qwen35::Qwen35;
-        use hipfire_arch_qwen35_vl::Qwen35Vl;
         let config = <Qwen35 as Architecture>::config_from_hfq(&hfq)
             .map_err(|e| e.to_string())?;
 
@@ -1671,7 +1730,6 @@ fn load_model(path: &str, max_seq: usize, draft_path: Option<&str>, kv_mode_over
         // triple (config → load → scratch). Forward passes below still call
         // `llama::*` directly — see crates/hipfire-arch-llama/src/arch.rs
         // for why static dispatch wins for the hot path.
-        use hipfire_runtime::arch::Architecture;
         let config = <Llama as Architecture>::config_from_hfq(&hfq)
             .map_err(|e| e.to_string())?;
         let weights = <Llama as Architecture>::load_weights(&mut hfq, &config, gpu)?;
@@ -1719,7 +1777,7 @@ fn load_model_pp(
     let tokenizer = hipfire_runtime::tokenizer::Tokenizer::from_hfq_metadata(&hfq.metadata_json)
         .ok_or("tokenizer not found")?;
 
-    if hfq.arch_id != 5 && hfq.arch_id != 6 {
+    if !<Qwen35 as Architecture>::supports_arch_id(hfq.arch_id) {
         return Err(format!(
             "pp>1 supports Qwen3.5 dense (arch_id=5) and Qwen3.5-MoE / \
              Qwen3.6-A3B (arch_id=6) only; got arch_id={}. LLaMA / Qwen3 \
@@ -3155,7 +3213,11 @@ fn generate(m: &mut LoadedModel, gpu: &mut rdna_compute::Gpu, stdout: &mut std::
     // thinking requests there until DFlash continuation is implemented.
     let budgeted_thinking_needs_ar = max_think_tokens > 0
         && !matches!(assistant_prefix, hipfire_runtime::prompt_frame::AssistantPrefix::ClosedThink);
-    if m.dflash.is_some() && temp <= 1e-6 && (m.arch_id == 5 || m.arch_id == 6) && !budgeted_thinking_needs_ar {
+    if m.dflash.is_some()
+        && temp <= 1e-6
+        && <Qwen35 as Architecture>::supports_arch_id(m.arch_id)
+        && !budgeted_thinking_needs_ar
+    {
         // PFlash + DFlash decode path is not yet wired -- the DFlash spec
         // loop builds its own prompt token stream internally, so the
         // generate() PFlash block below never runs. Surface this loud so
@@ -3513,7 +3575,7 @@ fn generate(m: &mut LoadedModel, gpu: &mut rdna_compute::Gpu, stdout: &mut std::
     let prefill_tokens = new_tokens.len();
     let t0 = Instant::now();
 
-    if m.arch_id == 5 || m.arch_id == 6 {
+    if <Qwen35 as Architecture>::supports_arch_id(m.arch_id) {
         // Qwen3.5 / Qwen3.5-MoE — multi-turn: prefill only the NEW turn tokens,
         // continuing from m.seq_pos (KV cache + DeltaNet state are cumulative)
         let config = m.q35_config.as_ref().unwrap();

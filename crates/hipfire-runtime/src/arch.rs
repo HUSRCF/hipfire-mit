@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! The bring-up contract for a hipfire architecture. Implement this
 //! trait in your arch crate (e.g. `hipfire-arch-qwen35`) to plug a
 //! model into the runtime. Generation, sampling, eviction, spec
@@ -88,6 +89,17 @@ pub trait Architecture: Send + 'static {
     /// and 1; the dense-vs-Qwen3-norm distinction is read off the HFQ
     /// metadata inside `config_from_hfq`).
     fn arch_id() -> u32;
+
+    /// Return whether this adapter accepts an HFQ architecture identifier.
+    ///
+    /// The default covers single-id architectures. Family adapters override
+    /// it when several on-disk identifiers share one implementation. Runtime
+    /// loaders must query this method instead of maintaining a parallel ID
+    /// list, so adding a family member remains local to its adapter crate.
+    #[inline]
+    fn supports_arch_id(arch_id: u32) -> bool {
+        arch_id == Self::arch_id()
+    }
 
     /// Human-readable arch tag for logs and CLI dispatch (e.g. `"qwen35"`,
     /// `"llama"`).

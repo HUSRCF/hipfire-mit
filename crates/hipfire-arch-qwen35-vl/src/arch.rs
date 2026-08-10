@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! `Architecture` trait implementation for the Qwen3.5-VL vision tower.
 //!
 //! Mirrors PR 8's pattern (`hipfire-arch-qwen35::arch`): trait-routed
@@ -57,6 +58,10 @@ impl Architecture for Qwen35Vl {
         5
     }
 
+    fn supports_arch_id(arch_id: u32) -> bool {
+        matches!(arch_id, 5 | 6)
+    }
+
     fn name() -> &'static str {
         "qwen35-vl"
     }
@@ -85,4 +90,17 @@ impl Architecture for Qwen35Vl {
     // No optional overrides needed. VL models reuse Qwen3.5's loop-guard /
     // sampler / prompt-frame / eos-filter conventions through the Qwen35
     // text-side trait impl. The vl impl only owns the vision tower bring-up.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vision_adapter_tracks_the_text_family_ids() {
+        assert!(Qwen35Vl::supports_arch_id(5));
+        assert!(Qwen35Vl::supports_arch_id(6));
+        assert!(!Qwen35Vl::supports_arch_id(1));
+        assert!(!Qwen35Vl::supports_arch_id(0xFF));
+    }
 }
