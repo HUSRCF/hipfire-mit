@@ -119,16 +119,9 @@ fn adapter_family(arch_id: u32) -> Result<AdapterFamily, String> {
 }
 
 fn model_arch_label(arch_id: u32) -> &'static str {
-    if arch_id == 6 && <Qwen35 as Architecture>::supports_arch_id(arch_id) {
-        "qwen3_5_moe"
-    } else if <Qwen35 as Architecture>::supports_arch_id(arch_id) {
-        "qwen3_5"
-    } else if <Llama as Architecture>::supports_arch_id(arch_id) {
-        // Preserve the existing daemon protocol family label for ids 0/1.
-        "qwen3"
-    } else {
-        "unknown"
-    }
+    <Qwen35 as Architecture>::protocol_label(arch_id)
+        .or_else(|| <Llama as Architecture>::protocol_label(arch_id))
+        .unwrap_or("unknown")
 }
 
 #[cfg(test)]

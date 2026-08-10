@@ -50,6 +50,12 @@ impl Architecture for Llama {
         "llama"
     }
 
+    fn protocol_label(arch_id: u32) -> Option<&'static str> {
+        // Keep the existing daemon protocol label for ids 0/1. This hook
+        // centralizes ownership without changing clients in this milestone.
+        Self::supports_arch_id(arch_id).then_some("qwen3")
+    }
+
     fn config_from_hfq(hfq: &HfqFile) -> Result<Self::Config, String> {
         if !Self::supports_arch_id(hfq.arch_id) {
             return Err(format!(
@@ -106,5 +112,8 @@ mod tests {
         assert!(Llama::supports_arch_id(1));
         assert!(!Llama::supports_arch_id(5));
         assert!(!Llama::supports_arch_id(0xFF));
+        assert_eq!(Llama::protocol_label(0), Some("qwen3"));
+        assert_eq!(Llama::protocol_label(1), Some("qwen3"));
+        assert_eq!(Llama::protocol_label(0xFF), None);
     }
 }

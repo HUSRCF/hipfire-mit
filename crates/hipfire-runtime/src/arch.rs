@@ -105,6 +105,15 @@ pub trait Architecture: Send + 'static {
     /// `"llama"`).
     fn name() -> &'static str;
 
+    /// Stable label exposed by runtime protocols for one supported family
+    /// member. The default uses the adapter name for single-id families.
+    /// Multi-id adapters override this when on-disk variants need distinct
+    /// labels. Unsupported ids return `None` so callers fail closed.
+    #[inline]
+    fn protocol_label(arch_id: u32) -> Option<&'static str> {
+        Self::supports_arch_id(arch_id).then_some(Self::name())
+    }
+
     /// Parse model-shape constants out of `hfq.metadata_json`.
     ///
     /// Returns a typed `Config` or an error string. Implementations

@@ -63,6 +63,14 @@ impl Architecture for Qwen35 {
         "qwen35"
     }
 
+    fn protocol_label(arch_id: u32) -> Option<&'static str> {
+        match arch_id {
+            5 => Some("qwen3_5"),
+            6 => Some("qwen3_5_moe"),
+            _ => None,
+        }
+    }
+
     fn config_from_hfq(hfq: &HfqFile) -> Result<Self::Config, String> {
         if !Self::supports_arch_id(hfq.arch_id) {
             return Err(format!(
@@ -104,5 +112,8 @@ mod tests {
         assert!(Qwen35::supports_arch_id(6));
         assert!(!Qwen35::supports_arch_id(0));
         assert!(!Qwen35::supports_arch_id(0xFF));
+        assert_eq!(Qwen35::protocol_label(5), Some("qwen3_5"));
+        assert_eq!(Qwen35::protocol_label(6), Some("qwen3_5_moe"));
+        assert_eq!(Qwen35::protocol_label(0xFF), None);
     }
 }
