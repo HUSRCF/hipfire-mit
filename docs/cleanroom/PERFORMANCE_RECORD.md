@@ -1133,3 +1133,71 @@ tok/s.
 - Decision: accept rows 45-46 as an independently specified integration
   contract. The scripts-only candidate composes all active GPU0 regression
   gates into one reproducible manifest and does not change inference code.
+
+---
+
+## M6: checked multimodal image input — 2026-08-10
+
+### Run identity
+
+- Regression parent: `575854bdfaf1ef077fdd50f615fb9ddb02b2800e`.
+- Candidate commit: `c0ba0b7930da81957bff5980f4d66bbc7162eefe`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Image-boundary SHA-256:
+  `72f505ee66360ae2bcc984eaec7c42606a230ef045be22226108510c0fac8b3d`.
+- Image-contract test SHA-256:
+  `76ab4cdb30e7720240beadf937bb58ea006e4eb070c2836df437b7bb8467226d`.
+- Candidate diff SHA-256 recorded by the integration run:
+  `910564c847ac3cd960a72ee02b7f863209672fb279d03bc5999260745f965b30`.
+- Candidate benchmark md5: `a9a5fe0b2c8b6e68a477bca6fc60d791`.
+- Candidate daemon md5: `adeed8e51f6cfca76fc9766aa7abca89`.
+- Candidate DFlash md5: `f5f44dfe14f3c142b7716e8b05566d5f`.
+- Environment: GPU0-only visibility and the same ROCm 7.14 library,
+  model-directory, W7900 baseline, explicit speed-gate DPM warm-up, and
+  per-child GPU-lock serialization used by the preceding runs.
+- Full command: `./scripts/cleanroom-integration-gate.sh --speed-runs 3
+  --out /tmp/hipfire-integration-row47` under the recorded environment.
+- Machine manifest: `/tmp/hipfire-integration-row47/summary.md`.
+
+### Measurements
+
+| Metric | Committed floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1310.7 | 1275.8 | 1268.6 | 1275.8 |
+| 4B MQ4 decode tok/s | 140.9 | 141.6 | 141.0 | 140.7 | 141.0 |
+
+The commit-hook repetition passes at 1289.3 prefill tok/s and 140.9 decode
+tok/s.
+
+### Decision
+
+- Candidate median deltas are +3.95% prefill and +0.07% decode. Every
+  observation passes the committed 5% regression tolerance. Relative to the
+  M5 medians, differences are -0.49% and +0.14%; no expansion runs were
+  required. The benchmark does not exercise the opt-in vision path, so this
+  establishes default-path non-regression and no speedup is attributed.
+- Four new image-contract tests and four existing channel-order tests pass.
+  Path-backed and decoded inputs produce identical `PreparedImage` values;
+  invalid geometry, arithmetic/layout errors, partial patches, and unsafe
+  aspect ratios fail before allocation or GPU dispatch.
+- Full locked workspace all-target tests, workspace examples, device-binding
+  audits, agentic detector self-check, and clean-room source/license gate pass.
+- Unified GPU0 quant parity passes all ten cases. Report:
+  `/tmp/hipfire-integration-row47/quant-parity.md`.
+- Four available standard coherence cells pass after manual review. Reports:
+  `/tmp/hipfire-integration-row47/coherence.md` and hook repetition
+  `/tmp/coherence-20260810-113428.md`.
+- All four DFlash/DDTree cells report `ok=true` and `soft_warn=false`; prose
+  and code outputs were manually reviewed. Report:
+  `/tmp/hipfire-integration-row47/coherence-dflash.md`.
+- The Qwen3.6 27B agentic cell emits valid `name='read'` JSON with zero hard
+  failures and zero soft warnings. Reports:
+  `/tmp/hipfire-integration-row47/agentic.md` and hook repetition
+  `/tmp/agentic-gate-20260810-113444.md`.
+- No installed HFQ model contains `vision_config`; end-to-end visual encoder
+  execution is therefore explicitly unverified on this host rather than
+  presented as a pass.
+- Decision: accept row 47 as a checked multimodal-input boundary shared by all
+  current VL frontends, with the model-dependent GPU vision smoke still open
+  until a compatible VL model is available.

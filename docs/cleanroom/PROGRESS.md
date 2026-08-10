@@ -19,6 +19,7 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M3: quantization and context paths | 19-43 | in progress | strict HFQ boundaries and quant-payload layouts, ten-cell GPU/CPU quant parity gating including MQ8/MQ4, a reproducible MQ8 scalar-dot negative experiment, shared packed-KV allocation, and checked long-context position continuity are complete; full model-level format fidelity remains open |
 | M4: kernel fault localization | 44 | complete | deterministic kernel artifact provenance and staged compile/load/symbol failure context |
 | M5: clean-room composition | 45-46 | complete | one reproducible CPU/GPU integration gate, evidence manifest, fail-closed GPU selection, and mandatory generated-output review |
+| M6: multimodal input boundary | 47 | complete | one checked image-to-patch representation shared by all VL frontends, with exact visual-token metadata and fallible malformed-input handling |
 
 ## M0 evidence
 
@@ -528,7 +529,54 @@ existing multi-GPU device-binding static audit remains included. Full evidence
 is in `docs/cleanroom/PERFORMANCE_RECORD.md` and the run manifest at
 `/tmp/hipfire-integration-row45-46/summary.md`.
 
-The conservative direction-table position is now complete through row 46 of
-2706; row 47 is next. Direction rows are audit inputs and are aggregated into
-independently specified implementation batches, so the remaining 2660 rows
-are not a promise of 2660 one-to-one Git commits.
+## M6 evidence
+
+### Checked visual-input normalization
+
+Direction row 47 requires non-text input to be normalized into a
+model-consumable representation while keeping interfaces consistent. The
+permitted snapshot decoded and normalized an image, derived its grid and token
+count, and extracted patches as separate operations repeated by `infer`,
+`infer_vl`, and the daemon. The daemon's early context estimate assumed a
+fixed 448-by-448 image even though smart resize can produce a different shape,
+so admission accounting could disagree with the representation later sent to
+the model.
+
+Commit `c0ba0b7930da81957bff5980f4d66bbc7162eefe` introduces an immutable
+`PreparedImage` boundary. Filesystem paths and already-decoded images share
+the same normalization implementation and produce checked patch data,
+resized dimensions, patch-grid dimensions, and the exact merged visual-token
+count. The three frontends consume those getters directly; callers no longer
+repeat geometry arithmetic. The daemon now admits requests using the true
+smart-resize token count and returns a structured error for an invalid image
+instead of panicking during decode.
+
+The preprocessing boundary validates positive patch, temporal, and merger
+geometry; checked resize-factor, area, CHW, patch, and token-count arithmetic;
+the image decoder's dimension limit; a 200:1 aspect-ratio safety limit; exact
+CHW length; patch divisibility; and merger-grid divisibility. Four new tests
+cover path/in-memory representation identity, derived-shape invariants,
+invalid model geometry, malformed CHW input, partial patches, zero dimensions,
+extreme aspect ratios, and resize alignment. The existing four pure-color
+channel-order tests continue to pass.
+
+The full locked workspace all-target suite, all workspace examples, binding
+audits, MIT gate, ten-cell quantization parity battery, four available
+standard coherence cells, all four DFlash/DDTree cells, and the Qwen3.6 27B
+agentic cell pass. Generated outputs were manually reviewed and the
+speculative/agentic detectors report no warning. Three fresh GPU0 performance
+observations have medians 1275.8 prefill tok/s and 141.0 decode tok/s,
+respectively +3.95% and +0.07% versus the W7900 floor. Relative to M5 they are
+-0.49% and +0.14%, so the 5% cross-batch expansion rule did not fire. The
+commit-hook repetition passes at 1289.3 and 140.9 tok/s.
+
+No installed model contains a vision configuration, so this host cannot run
+an end-to-end vision-tower GPU inference. That environment gap is not counted
+as a pass: the accepted evidence covers deterministic preprocessing parity,
+all VL entry-point compilation, and default-path GPU0 non-regression. Full
+identities and reports are in `docs/cleanroom/PERFORMANCE_RECORD.md`.
+
+The conservative direction-table position is now complete through row 47 of
+2706; row 48 is next. Direction rows are audit inputs and are aggregated into
+independently specified implementation batches, so the remaining 2659 rows
+are not a promise of 2659 one-to-one Git commits.
