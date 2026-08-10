@@ -25,6 +25,7 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M9: HFQ consumer shapes | 50 | complete | load-time binding between file-declared payload shapes and model-consumer dimensions |
 | M10: tokenizer special-token scan | 51 | complete | byte-identical single-pass special-token discovery with reproducible CPU and GPU0 performance evidence |
 | M11: speculative seed-repeat embedding | 52 | complete | exact Q8 seed-plus-mask block embedding in one GPU launch, shared by all DFlash/DDTree draft paths |
+| M12: packed KV footprint record | 53 | complete | deterministic four-format capacity records derived from the checked allocation contract |
 
 ## M0 evidence
 
@@ -811,5 +812,51 @@ W7900 floor they change by +4.09% and -0.71%.
 
 The conservative direction-table position is now complete through row 52 of
 2706; row 53 is next. The remaining direction count is 2654. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.
+
+## M12 evidence
+
+### Allocation-derived context footprint records
+
+Direction row 53 is a record-oriented attention/cache entry. The permitted
+implementation already used one overflow-checked packed-layout contract for
+single-GPU, filtered, and multi-GPU cache constructors, but capacity evidence
+still depended on copied formulas and incidental constructor logs. That made
+it possible for a report to drift from the storage actually allocated or from
+the byte strides consumed by kernels.
+
+Commit `d0b76b3e815bc0fb0bd3d6b0347a542f3c1953af` exposes a read-only
+`packed_kv_footprint` planner. It calls the same `PackedKvLayout` used by the
+real constructors and records format, KV-layer count, head shape, logical
+context, physical capacity, K/V bytes per head, F32-storage-rounded bytes per
+layer, and total K+V allocation. All aggregate arithmetic is checked for host
+address-space overflow, and zero KV-layer records fail closed. The planner
+does not allocate a GPU and is absent from inference hot paths.
+
+A deterministic example emits JSON for Q8, Asym2, Asym3, and Asym4 at 16 KV
+layers, four 256-dimensional KV heads, logical context 65,536, and physical
+capacity 2,048. The resulting totals are respectively 68.0, 42.5, 46.5, and
+50.5 MiB. Unit tests pin all four totals, the exact Asym3 per-head/per-layer
+layout, logical-versus-physical capacity, empty-layer rejection, and aggregate
+overflow. A static audit requires the shared layout call, public record, four
+formats, and deterministic example; it is part of every integration run.
+
+The full locked workspace all-target suite, all examples, clean-room audits,
+eleven-cell quantization parity battery, four available standard coherence
+cells, four DFlash/DDTree cells, and the Qwen3.6 27B agentic cell pass on GPU0.
+Manual review found on-topic bounded text, valid tool-call JSON, and no
+speculative or agentic warning. The 4B code and 9B reasoning cells reach their
+short-mode token bounds; their visible analysis remains correct and free of
+loops.
+
+Three fresh GPU0 performance processes measure 1,319.6, 1,296.8, and 1,287.6
+prefill tok/s and 141.5, 141.1, and 140.6 decode tok/s. Their medians are
+1,296.8 and 141.1 tok/s. Relative to M11 they change by +1.51% and +0.86%, so
+the 5% cross-batch expansion rule did not fire. Relative to the committed
+W7900 floor they change by +5.66% and +0.14%.
+
+The conservative direction-table position is now complete through row 53 of
+2706; row 54 is next. The remaining direction count is 2653. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
