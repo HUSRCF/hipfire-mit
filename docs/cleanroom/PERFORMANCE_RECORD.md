@@ -2647,3 +2647,55 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
   regression.
 - Decision: accept row 73 as a cold-load adapter-ownership correction with
   explicit fail-closed, MIT-boundary, quality, and performance evidence.
+
+---
+
+## M33: topology-filtered packed KV allocation — 2026-08-11
+
+### Run identity
+
+- Regression parent: `5e9d40d8cbfc3bcf6dd022222fba8e0d19550b96`.
+- Candidate commit: `dc7f9fd49df5093b2ffb573b309e6bacf112150a`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- KV cache implementation SHA-256: `afd045359519c2eac9f538e02cfd84680d1f6efb9cf3d7d73a5a85d2cf337921`.
+- Daemon SHA-256: `3947280a9bb3705212d765df5133f7cacea5aa34a1688fb4490af6202f610343`.
+- Hybrid-allocation audit SHA-256: `e047f6dc72bb8c6510b844adbc05a05a47857be8b84484fd2272d035cbef4c0d`.
+- Candidate diff SHA-256: `5361a7b8537e719ce790510c5c6ac186ff0fe3d067ee6ed311345144c584fee2`.
+- Reports md5: quant `ad41020aba91d1d06eec94183471844a`, standard
+  `f9493bf8e29aa4be21d872cc492a8a7f`, DFlash
+  `74ca89d3e1d355fa9cbc3558da4147f8`, agentic
+  `15073b802afb62c2315b4d3417896548`.
+- Full gate: `/tmp/hipfire-integration-row74/summary.md`.
+- Supplemental Asym2/Asym4 GPU smoke:
+  `/tmp/hipfire-row74-packed-modes.log` (SHA-256
+  `c0a4daac63705ea9a62d8861b8220a3d0f4c5dc50dfc5ef35e56174f604e8cf5`).
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1320.8 | 1276.6 | 1325.7 | 1320.8 |
+| 4B MQ4 decode tok/s | 140.9 | 141.8 | 141.2 | 140.9 | 141.2 |
+
+### Decision
+
+- All four packed single-GPU KV modes now use the hybrid layer mask, including
+  explicit Asym2/Asym4 selection and the unknown-mode Asym3 fallback.
+- Fixed footprint records show that Asym2 and Asym4 each avoid 75% of their
+  prior all-layer allocation on the representative 64/16 hybrid topology:
+  133,693,056 and 158,858,880 bytes respectively.
+- A supplemental real-model GPU0 smoke loads and generates with both changed
+  modes. Each route reports 8/32 KV-carrying layers. These short runs validate
+  execution only; the standard Asym3 battery remains the performance basis.
+- Focused footprint tests, static routing audits, full CPU/GPU0 gates, and all
+  eleven quant-parity cases pass. Performance medians change +3.12%/+0.21%
+  from M32 and remain +7.62%/+0.21% versus the floor; no five-run expansion
+  was required.
+- Generated outputs were manually reviewed as fluent, on-topic, and
+  non-looping. All four speculative cases are clean and Agentic reports zero
+  warnings. The bounded 9B reasoning sample ends inside its reasoning span,
+  so it is not claimed as a complete answer.
+- Decision: accept row 74 as a context-capacity correction with explicit
+  topology, numerical, execution, MIT-boundary, quality, and performance
+  evidence.

@@ -1534,3 +1534,42 @@ The conservative direction-table position is now complete through row 73 of
 2706; row 74 is next. The remaining direction count is 2633. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M33 evidence
+
+### Topology-filtered packed KV allocation
+
+Direction row 74 returns to the context path. Qwen3.5 hybrid models only need
+K/V storage on their full-attention layers. The default Asym3 and Q8 daemon
+paths already honored that topology, but explicit Asym2 and Asym4 selection
+still allocated packed K/V for every layer. The unknown-mode fallback also
+returned to an unfiltered Asym3 constructor.
+
+Commit `dc7f9fd` adds capped, topology-filtered Asym2 and Asym4 constructors
+on the shared KV cache abstraction. Their uncapped compatibility wrappers now
+delegate to the same implementation. The daemon passes its full-attention
+layer mask to all four packed modes and to the fallback, while a static audit
+rejects any reintroduced unfiltered single-GPU constructor call.
+
+The footprint test pins all four formats at a 64-layer/16-KV-layer hybrid
+shape. At the tested 2,048-token physical capacity, filtering avoids
+133,693,056 bytes for Asym2 and 158,858,880 bytes for Asym4, exactly 75% of
+their former all-layer allocations. A supplemental GPU0 smoke run loads the
+installed 4B hybrid model under both modes; each reports 8/32 KV-carrying
+layers and completes generation. This smoke validates routing and execution,
+but its short cold-load timings are not used as performance claims.
+
+The complete CPU and GPU0 batteries pass, including eleven quant-parity cases,
+standard coherence, four clean DFlash/DDTree cases, and Agentic with zero hard
+failures or soft warnings. Manual review found fluent, on-topic, non-looping
+output and valid tool-call JSON. The bounded 9B reasoning case stops inside
+its reasoning span and remains an explicit completeness limitation.
+
+Three fresh speed processes measure 1,320.8, 1,276.6, and 1,325.7 prefill
+tok/s and 141.8, 141.2, and 140.9 decode tok/s. Medians are 1,320.8 and 141.2,
+changing +3.12% and +0.21% from M32; no five-run expansion was required.
+
+The conservative direction-table position is now complete through row 74 of
+2706; row 75 is next. The remaining direction count is 2632. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.
