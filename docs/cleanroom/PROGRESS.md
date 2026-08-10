@@ -622,3 +622,46 @@ The conservative direction-table position is now complete through row 48 of
 2706; row 49 is next. The remaining direction count is 2658. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M8 evidence
+
+### Adapter-owned architecture families
+
+Direction row 49 requires architecture differences to remain behind dedicated
+adapters while execution infrastructure stays shared. The permitted snapshot
+already exposed an `Architecture` adapter trait, but the daemon still selected
+families with hard-coded numeric tests and silently treated every unknown
+architecture identifier as LLaMA. That fallback could bind an unsupported
+model to the wrong implementation instead of rejecting it.
+
+Commit `22848b873e4fe14264d568241a11fce4d0c36404` adds an adapter-owned
+`supports_arch_id` contract. LLaMA owns identifiers 0 and 1, Qwen3.5 and its
+VL adapter own identifiers 5 and 6, and Toy retains its single canonical
+identifier. Daemon model loading, family labels, pipeline-parallel checks,
+and Qwen-family capability checks now query those adapters. Unknown identifiers
+fail closed with an explicit error. Protocol-visible family labels are unchanged,
+and execution hot paths remain statically dispatched; the new family resolution
+is confined to cold model-selection paths.
+
+Per-adapter unit tests cover canonical and alternate identifiers, daemon tests
+cover all supported families, fail-closed behavior, and stable protocol labels,
+and a new architecture-adapter audit is part of every clean-room integration
+run. The full locked workspace all-target suite, all workspace examples,
+binding audits, MIT gate, ten-cell quantization parity battery, four available
+standard coherence cells, all four DFlash/DDTree cells, and the Qwen3.6 27B
+agentic cell pass on GPU0. Manual review found coherent bounded outputs, valid
+tool-call JSON, and no speculative or agentic warning.
+
+The first three fresh performance processes had an elevated prefill median, so
+the cross-batch 5% rule expanded the sample to five independent processes. The
+five observations are 1314.2, 1376.2, 1378.3, 1226.7, and 1314.5 prefill tok/s,
+and 141.4, 141.4, 140.5, 140.7, and 140.2 decode tok/s. Their medians are 1314.5
+and 140.7 tok/s. Relative to M7 they change by +1.09% and +0.14%; relative to
+the committed W7900 floor they change by +7.11% and -0.14%. The commit-hook
+repetition passes at 1251.4 and 141.4 tok/s. This batch claims adapter-boundary
+correctness and no regression, not a speedup.
+
+The conservative direction-table position is now complete through row 49 of
+2706; row 50 is next. The remaining direction count is 2657. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.

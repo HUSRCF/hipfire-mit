@@ -1271,3 +1271,77 @@ tok/s.
 - Decision: accept row 48 as a single generation-stop contract shared by all
   current user-facing decode paths, with persistent static coverage against
   future entry-point drift.
+
+---
+
+## M8: adapter-owned architecture families — 2026-08-10
+
+### Run identity
+
+- Regression parent: `2ed3959551dc0cc16d56565cdcf18b125be058da`.
+- Candidate commit: `22848b873e4fe14264d568241a11fce4d0c36404`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Runtime adapter contract SHA-256:
+  `aded4e881760358ff7f6e8ff94af6507d4b8890ae621f92962da3989b15df630`.
+- Architecture-adapter audit SHA-256:
+  `58f02b4e169ceb835d4cb8babdd64b2cc11c7e3e941a5181cad5105fbcad40ee`.
+- Candidate commit diff SHA-256:
+  `61744ce082aca3e7f6c326292c6af87a1241d091bf3a6feb25f059af051ecc56`.
+- Candidate benchmark md5: `a9a5fe0b2c8b6e68a477bca6fc60d791`.
+- Candidate daemon md5: `7ef8596c93667307734125ec4b36902d`.
+- Candidate DFlash md5: `f5f44dfe14f3c142b7716e8b05566d5f`.
+- Environment: GPU0-only ROCr/HIP visibility, ROCm 7.14 library path,
+  local read-only model directory, W7900 baseline selection, explicit
+  speed-gate DPM warm-up, and per-child GPU-lock serialization.
+- Full command: `./scripts/cleanroom-integration-gate.sh --speed-runs 3
+  --out /tmp/hipfire-integration-row49` under the recorded environment,
+  followed by two fresh `./scripts/speed-gate.sh --fast` processes after the
+  cross-batch expansion rule fired.
+- Machine manifest: `/tmp/hipfire-integration-row49/summary.md`.
+
+### Measurements
+
+| Metric | Committed floor | Observation 1 | Observation 2 | Observation 3 | Observation 4 | Observation 5 | Median |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1314.2 | 1376.2 | 1378.3 | 1226.7 | 1314.5 | 1314.5 |
+| 4B MQ4 decode tok/s | 140.9 | 141.4 | 141.4 | 140.5 | 140.7 | 140.2 | 140.7 |
+
+The commit-hook repetition passes at 1251.4 prefill tok/s and 141.4 decode
+tok/s.
+
+### Decision
+
+- The initial three-process prefill median was +5.84% versus M7, so the
+  predefined cross-batch rule expanded the sample to five processes. The
+  five-process median changes are +1.09% prefill and +0.14% decode versus M7,
+  and +7.11% prefill and -0.14% decode versus the committed floor. Every
+  observation passes the 5% regression tolerance. Adapter family resolution
+  remains outside GPU execution hot paths, so no speedup is attributed.
+- Adapter tests prove that LLaMA owns identifiers 0/1, Qwen3.5 and Qwen3.5-VL
+  own 5/6, and Toy retains its canonical identifier. Daemon tests prove that
+  unsupported identifier 255 fails closed and that protocol labels remain
+  stable. The static architecture-adapter audit is included in the integration
+  manifest.
+- Full locked workspace all-target tests, workspace examples, device-binding
+  audits, generation-semantics audit, agentic detector self-check, and
+  clean-room source/license gate pass.
+- Unified GPU0 quant parity passes all ten cases. Report:
+  `/tmp/hipfire-integration-row49/quant-parity.md`.
+- Four available standard coherence cells pass after manual review. The 9B
+  reasoning sample reaches the short-mode generation bound while remaining
+  on-topic; the other outputs give the requested answer or valid tool call.
+  Reports: `/tmp/hipfire-integration-row49/coherence.md` and hook repetition
+  `/tmp/coherence-20260810-115645.md`.
+- All four DFlash/DDTree cells report `ok=true` and `soft_warn=false`; prose
+  and code outputs were manually reviewed. Report:
+  `/tmp/hipfire-integration-row49/coherence-dflash.md`.
+- The Qwen3.6 27B agentic cell emits valid `name='read'` JSON with zero hard
+  failures and zero soft warnings. Reports:
+  `/tmp/hipfire-integration-row49/agentic.md` and hook repetition
+  `/tmp/agentic-gate-20260810-115709.md`.
+- PFlash remains explicitly skipped because the required local target/drafter
+  pair is absent; this is not counted as passing coverage.
+- Decision: accept row 49 as an adapter-owned architecture-family boundary
+  with fail-closed unknown identifiers and shared statically dispatched
+  execution foundations.
