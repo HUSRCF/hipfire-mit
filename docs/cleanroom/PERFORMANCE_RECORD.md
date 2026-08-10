@@ -1345,3 +1345,75 @@ tok/s.
 - Decision: accept row 49 as an adapter-owned architecture-family boundary
   with fail-closed unknown identifiers and shared statically dispatched
   execution foundations.
+
+---
+
+## M9: HFQ consumer-shape contract — 2026-08-10
+
+### Run identity
+
+- Regression parent: `bb127f995b053f92724e4c1124a1d4a1637a2ba0`.
+- Candidate commit: `dc2a8ed0aa1ab80cb55884b13823ae38e9e2e4a6`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- HFQ loader SHA-256:
+  `28a5651a53d07156bc30c47bee821e0f52c5b12c9386a0aead011bc02d09a6a1`.
+- Consumer-shape audit SHA-256:
+  `7bd02d12d8a7f3efe10bd2c42ec066257f9b36555384b0919a23ea96b2fbb246`.
+- Candidate commit diff SHA-256:
+  `d5a1a7659aba15a65e5e52921eee8707765bd467c130e4378dfbfc67903fc573`.
+- Candidate benchmark md5: `cedc862bd519478e4c1478e55d79d796`.
+- Candidate daemon md5: `6267d1dcf1e8d89160c1dbb3b00e2914`.
+- Candidate DFlash md5: `eb1eb35810ac8393b0398ece0281eb1a`.
+- Environment: GPU0-only ROCr/HIP visibility, ROCm 7.14 library path,
+  local read-only model directory, W7900 baseline selection, explicit
+  speed-gate DPM warm-up, and per-child GPU-lock serialization.
+- Full command: `./scripts/cleanroom-integration-gate.sh --speed-runs 3
+  --out /tmp/hipfire-integration-row50` under the recorded environment.
+- Machine manifest: `/tmp/hipfire-integration-row50/summary.md`.
+
+### Measurements
+
+| Metric | Committed floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1297.1 | 1249.7 | 1278.2 | 1278.2 |
+| 4B MQ4 decode tok/s | 140.9 | 141.3 | 140.8 | 140.3 | 140.8 |
+
+The commit-hook repetition passes at 1303.4 prefill tok/s and 141.1 decode
+tok/s.
+
+### Decision
+
+- Candidate median deltas are +4.15% prefill and -0.07% decode versus the
+  committed floor. Every observation passes the 5% regression tolerance.
+  Relative to M8's five-process medians the changes are -2.76% and +0.07%, so
+  no two-run expansion was required. Shape validation runs once while loading
+  model bytes and is absent from inference and GPU dispatch hot paths; no
+  performance improvement is attributed.
+- The consumer-shape unit test accepts exact matrix shapes and intentional
+  flattened element counts, then rejects both matrix-dimension and element-count
+  mismatches. The static audit requires metadata-bearing Qwen raw loads and
+  exact matrix checks in LLaMA, Qwen3.5, and DFlash loaders.
+- Full locked workspace all-target tests, workspace examples, device-binding
+  audits, architecture-adapter audit, generation-semantics audit, agentic
+  detector self-check, and clean-room source/license gate pass.
+- Unified GPU0 quant parity passes all ten cases. Reports:
+  `/tmp/hipfire-integration-row50/quant-parity.md` and hook repetition
+  `/tmp/quant-parity-20260810-121214.md`.
+- Four available standard coherence cells pass after manual review. The 4B and
+  9B samples reach the short-mode generation bound while remaining on-topic;
+  the capital answer and tool call are complete. Reports:
+  `/tmp/hipfire-integration-row50/coherence.md` and hook repetition
+  `/tmp/coherence-20260810-121224.md`.
+- All four DFlash/DDTree cells report `ok=true` and `soft_warn=false`; prose
+  and code outputs were manually reviewed. Reports:
+  `/tmp/hipfire-integration-row50/coherence-dflash.md` and hook repetition
+  `/tmp/coherence-dflash-20260810-121251.md`.
+- The Qwen3.6 27B agentic cell emits valid `name='read'` JSON with zero hard
+  failures and zero soft warnings. Reports:
+  `/tmp/hipfire-integration-row50/agentic.md` and hook repetition
+  `/tmp/agentic-gate-20260810-121315.md`.
+- PFlash remains explicitly skipped because the required local target/drafter
+  pair is absent; this is not counted as passing coverage.
+- Decision: accept row 50 as a load-time contract binding validated HFQ payload
+  layouts to model-consumer dimensions before any GPU interpretation.

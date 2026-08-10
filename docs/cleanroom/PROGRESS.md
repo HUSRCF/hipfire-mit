@@ -665,3 +665,48 @@ The conservative direction-table position is now complete through row 49 of
 2706; row 50 is next. The remaining direction count is 2657. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M9 evidence
+
+### HFQ consumer-shape contract
+
+Direction row 50 requires quantized formats to make compatibility, numerical,
+storage, and throughput tradeoffs explicit. The permitted implementation
+already validated that every HFQ payload matched the shape declared by its own
+index entry. Model loaders, however, could then interpret those bytes using
+dimensions derived from model configuration without proving that the two
+shapes agreed. A file could therefore be internally self-consistent yet be
+handed to a GPU kernel with incompatible matrix dimensions.
+
+Commit `dc2a8ed0aa1ab80cb55884b13823ae38e9e2e4a6` adds cold-path
+`expect_shape` and `expect_numel` contracts to HFQ tensor metadata. LLaMA,
+Qwen3.5, and DFlash matrix loaders now bind file-declared shapes to the model's
+expected dimensions before upload. Embedding and normalization loads are also
+checked, while the Qwen raw-byte loader now requires complete tensor metadata
+instead of accepting a detached numeric quantization identifier. Explicitly
+flattened DeltaNet tensors use the element-count contract. No validation is
+placed in inference or GPU dispatch hot paths.
+
+A negative unit test proves exact-shape and flattened-count acceptance and
+rejects incompatible consumer dimensions. A static audit prevents the Qwen raw
+loader from reverting to quant-type-only calls and requires matrix checks in
+all three covered loaders; the audit is part of every integration run. The
+full locked workspace all-target suite, all workspace examples, binding and
+clean-room audits, ten-cell quantization parity battery, four available
+standard coherence cells, all four DFlash/DDTree cells, and the Qwen3.6 27B
+agentic cell pass on GPU0. Manual review found coherent bounded text, valid
+tool-call JSON, and no speculative or agentic warning.
+
+Three fresh performance processes measure 1297.1, 1249.7, and 1278.2 prefill
+tok/s and 141.3, 140.8, and 140.3 decode tok/s. Their medians are 1278.2 and
+140.8 tok/s. Relative to M8 they change by -2.76% and +0.07%, so the 5%
+cross-batch expansion rule did not fire. Relative to the committed W7900 floor
+they change by +4.15% and -0.07%. The commit-hook repetition passes at 1303.4
+and 141.1 tok/s. This batch claims safer format compatibility and no runtime
+regression, not a speedup.
+
+The conservative direction-table position is now complete through row 50 of
+2706; row 51 is next. The remaining direction count is 2656. Per user request,
+work pauses at this boundary. Direction rows remain audit inputs aggregated
+into independently specified implementation batches, not a promise of one Git
+commit per row.
