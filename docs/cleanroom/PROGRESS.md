@@ -24,6 +24,7 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M8: architecture-family adapters | 49 | complete | adapter-owned model-family identifiers, fail-closed unknown families, and shared execution foundations |
 | M9: HFQ consumer shapes | 50 | complete | load-time binding between file-declared payload shapes and model-consumer dimensions |
 | M10: tokenizer special-token scan | 51 | complete | byte-identical single-pass special-token discovery with reproducible CPU and GPU0 performance evidence |
+| M11: speculative seed-repeat embedding | 52 | complete | exact Q8 seed-plus-mask block embedding in one GPU launch, shared by all DFlash/DDTree draft paths |
 
 ## M0 evidence
 
@@ -758,5 +759,57 @@ measured CPU tokenizer path.
 
 The conservative direction-table position is now complete through row 51 of
 2706; row 52 is next. The remaining direction count is 2655. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.
+
+## M11 evidence
+
+### One-launch speculative input embedding
+
+Direction row 52 calls for low-cost candidate generation and batched
+verification. An independent audit of the permitted DFlash implementation
+found that every draft cycle constructs the fixed input shape `[seed, mask,
+mask, ...]`, but the installed 27B Q8 target launched one embedding kernel per
+row. The repeated mask rows therefore paid serial launch overhead even though
+their token identifier and lookup table row are identical.
+
+Commit `d283ab580696390018b0e67be0b06ab747ad651c` adds a Q8 seed-repeat
+embedding kernel that selects the seed row for block zero and the repeated
+mask row for every other block. All rows are emitted in one launch, with the
+two token identifiers passed as scalar arguments; no per-cycle token-id upload
+is introduced. One shared helper applies this path to vanilla DFlash and both
+DDTree draft entry points. HFQ4 and F32 formats retain their prior exact
+per-row fallback.
+
+A deterministic synthetic Q8 table proves bit-exact equality between seven
+single-row reference lookups and the new seven-row launch. The parity case is
+the eleventh member of the mandatory GPU battery. A static audit requires the
+kernel, dispatch contract, all three call sites, parity anchor, and retained
+phase-performance evidence; it is included in every integration run.
+
+Three fresh GPU0 processes measured both the parent and candidate with phase
+diagnostics enabled. In the deterministic code cell, the median draft phase
+falls from 9,699.2 us to 9,649.8 us (-0.51%), while end-to-end throughput is
+149.42 versus 149.30 tok/s (-0.08%). In the stochastic prose cell the median
+draft phase is effectively unchanged at 8,469.5 versus 8,469.2 us, and all
+three candidate processes remain free of token-attractor warnings. The
+optimization therefore removes fifteen serial launches at `B=16` without a
+measurable end-to-end regression; the claimed speedup is limited to the
+instrumented code-cell draft phase.
+
+The full locked workspace all-target suite, all examples, clean-room audits,
+eleven-cell quantization parity battery, four available standard coherence
+cells, four DFlash/DDTree cells, and the Qwen3.6 27B agentic cell pass on GPU0.
+Manual review found coherent text, valid tool-call JSON, and no speculative or
+agentic warning.
+
+Three fresh general GPU0 performance processes measure 1,263.7, 1,359.0, and
+1,277.5 prefill tok/s and 140.6, 139.9, and 139.6 decode tok/s. Their medians
+are 1,277.5 and 139.9 tok/s. Relative to M10 they change by -1.65% and -1.20%,
+so the 5% cross-batch expansion rule did not fire. Relative to the committed
+W7900 floor they change by +4.09% and -0.71%.
+
+The conservative direction-table position is now complete through row 52 of
+2706; row 53 is next. The remaining direction count is 2654. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.

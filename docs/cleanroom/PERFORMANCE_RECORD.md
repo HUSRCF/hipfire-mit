@@ -1499,3 +1499,87 @@ table's median is then taken across three fresh processes; lower is better.
 - Decision: accept row 51 as a semantic-preserving tokenizer hot-path
   improvement, with the CPU speedup separately attributed and the full GPU0
   inference path demonstrated non-regressing.
+
+---
+
+## M11: speculative seed-repeat embedding — 2026-08-10
+
+### Run identity
+
+- Regression parent: `6ea19f00f94eb92f917da69c6ced269df90014b5`.
+- Candidate commit: `d283ab580696390018b0e67be0b06ab747ad651c`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Seed-repeat kernel SHA-256:
+  `a6153828958a75e21165c9a2dbf2af52347ce65900da31d92c33a00200051bad`.
+- Exact-parity example SHA-256:
+  `e52ae00249ceda7def2e2d1f326bf112d1d6242613ffab8ff46cc02031c7958a`.
+- Static audit SHA-256:
+  `cd055deda797f1bfad78dc6313719c787b9ae0b57431f2c79b5b36affe148f44`.
+- Candidate commit diff SHA-256:
+  `f20def845608fa5ff134a3e5e20bbf8b750871b8da3a08b26ff3723c2877c6c6`.
+- Candidate parity binary md5: `8706b5c5ee226bba0ce40aba7a621c61`.
+- Candidate DFlash binary md5: `05e01a709fd0b06a55a9d04bd4d1dc4b`.
+- Final quant report md5: `fa785bac50e22165f5bf77ac3f690c05`.
+- Final DFlash report md5: `77a48f3e3fd61ba69a20f3e60b028dac`.
+- Environment: GPU0-only ROCr/HIP visibility, ROCm 7.14 library path,
+  local read-only model directory, W7900 baseline selection, explicit
+  speed-gate DPM warm-up, and per-child GPU-lock serialization.
+- Full command: `./scripts/cleanroom-integration-gate.sh --speed-runs 3
+  --out /tmp/hipfire-integration-row52` under the recorded environment.
+- Machine manifest: `/tmp/hipfire-integration-row52/summary.md`.
+
+### DFlash phase measurements
+
+Each row is a fresh process using the same 27B MQ4 target/drafter pair. Phase
+times are synchronized per cycle and averaged within each process; the table
+reports medians across three processes. Lower phase time and higher throughput
+are better.
+
+| Cell | Version | Throughput tok/s | Draft us | Verify us | Total us |
+|---|---|---:|---:|---:|---:|
+| Prose | parent | 37.22 | 8469.5 | 47227.1 | 58601.4 |
+| Prose | candidate | 36.64 | 8469.2 | 47635.3 | 59010.0 |
+| Code | parent | 149.42 | 9699.2 | 52198.2 | 65878.5 |
+| Code | candidate | 149.30 | 9649.8 | 52274.5 | 65899.0 |
+
+The code cell is behaviorally stable across all processes (`tau=8.917`, 107
+accepted tokens, 119 committed tokens), so its draft-phase delta is directly
+comparable: -0.51%. Code throughput changes by -0.08% and total cycle time by
++0.03%. Prose acceptance is stochastic; its median draft time changes by less
+than 0.01%, and every output-distribution detector passes.
+
+### General GPU measurements
+
+| Metric | Committed floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1263.7 | 1359.0 | 1277.5 | 1277.5 |
+| 4B MQ4 decode tok/s | 140.9 | 140.6 | 139.9 | 139.6 | 139.9 |
+
+### Decision
+
+- The Q8 seed-repeat kernel is bit-exact to seven serial reference lookups and
+  is exercised by the installed 27B target. Quant parity passes all 11 cases.
+- At `B=16`, candidate construction replaces 16 serial embedding launches
+  with one launch. The deterministic code draft phase improves by 0.51%; no
+  end-to-end metric regresses materially.
+- General GPU medians change by +4.09% prefill and -0.71% decode versus the
+  committed W7900 floor. Relative to M10 they change by -1.65% and -1.20%, so
+  no five-run expansion was required.
+- Full locked workspace all-target tests, workspace examples, device-binding,
+  architecture, HFQ-shape, tokenizer, speculative-embedding, generation,
+  agentic-detector, and clean-room source/license audits pass.
+- Four available standard coherence cells pass after manual review. The 9B
+  reasoning sample reaches the short-mode bound while remaining on-topic; the
+  other outputs provide the requested answer, code, or valid tool call.
+  Report: `/tmp/hipfire-integration-row52/coherence.md`.
+- All four DFlash/DDTree cells report `ok=true` and `soft_warn=false`; prose
+  and code outputs were manually reviewed. Report:
+  `/tmp/hipfire-integration-row52/coherence-dflash.md`.
+- The Qwen3.6 27B agentic cell emits valid `name='read'` JSON with zero hard
+  failures and zero soft warnings. Report:
+  `/tmp/hipfire-integration-row52/agentic.md`.
+- PFlash remains explicitly skipped because the required local target/drafter
+  pair is absent; this is not counted as passing coverage.
+- Decision: accept row 52 as an exact speculative-input batching improvement
+  with a measured draft-phase gain and full GPU0 non-regression evidence.
