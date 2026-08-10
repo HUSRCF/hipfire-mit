@@ -374,6 +374,52 @@ pub struct SpecPair {
     pub tokenizer: Tokenizer,
 }
 
+/// Embed the DFlash input block `[seed, mask, mask, ...]` directly into the
+/// draft scratch. Q8 embeddings use one specialized batched launch; less
+/// common formats retain the exact per-row fallback.
+fn embed_dflash_seed_mask_block(
+    gpu: &mut Gpu,
+    target: &ModelSlot,
+    draft_scratch: &DflashScratch,
+    seed_token: u32,
+    mask_token: u32,
+    b: usize,
+    hidden: usize,
+) -> HipResult<()> {
+    if matches!(
+        target.weights.embd_format,
+        hipfire_runtime::llama::EmbeddingFormat::Q8_0,
+    ) {
+        return gpu.embedding_lookup_q8_seed_repeat(
+            &target.weights.token_embd,
+            &draft_scratch.x,
+            seed_token,
+            mask_token,
+            b,
+            hidden,
+        );
+    }
+
+    for i in 0..b {
+        let token = if i == 0 { seed_token } else { mask_token };
+        let dst = draft_scratch.x.sub_offset(i * hidden, hidden);
+        match target.weights.embd_format {
+            hipfire_runtime::llama::EmbeddingFormat::HFQ4G256 => {
+                gpu.embedding_lookup_hfq4g256(&target.weights.token_embd, &dst, token, hidden)?
+            }
+            hipfire_runtime::llama::EmbeddingFormat::HFQ4G128 => {
+                gpu.embedding_lookup_hfq4g128(&target.weights.token_embd, &dst, token, hidden)?
+            }
+            hipfire_runtime::llama::EmbeddingFormat::F32 => {
+                gpu.embedding_lookup(&target.weights.token_embd, &dst, token, hidden)?
+            }
+            hipfire_runtime::llama::EmbeddingFormat::Q8_0 => unreachable!(),
+            _ => panic!("dflash: unsupported target embedding format for noise lookup"),
+        }
+    }
+    Ok(())
+}
+
 impl SpecPair {
     /// Load target and draft from separate HFQ files on the same `Gpu`.
     /// Validates that the two models share a compatible tokenizer before
@@ -2641,25 +2687,11 @@ pub fn spec_step_dflash(
     // ── 2. noise_embedding = target.embed_tokens(block) written directly
     // into draft_scratch.x on GPU (no host round-trip). Target and draft
     // share the same Gpu, so the embedding lookup can target the draft's
-    // scratch buffer. Avoids 16 × D2H + one H2D per iter (~1 ms saved).
-    for (i, &tok) in block.iter().enumerate() {
-        let dst = draft_scratch.x.sub_offset(i * h, h);
-        match target.weights.embd_format {
-            hipfire_runtime::llama::EmbeddingFormat::HFQ4G256 => {
-                gpu.embedding_lookup_hfq4g256(&target.weights.token_embd, &dst, tok, h)?
-            }
-            hipfire_runtime::llama::EmbeddingFormat::HFQ4G128 => {
-                gpu.embedding_lookup_hfq4g128(&target.weights.token_embd, &dst, tok, h)?
-            }
-            hipfire_runtime::llama::EmbeddingFormat::Q8_0 => {
-                gpu.embedding_lookup_q8(&target.weights.token_embd, &dst, tok, h)?
-            }
-            hipfire_runtime::llama::EmbeddingFormat::F32 => {
-                gpu.embedding_lookup(&target.weights.token_embd, &dst, tok, h)?
-            }
-            _ => panic!("dflash: unsupported target embedding format for noise lookup"),
-        }
-    }
+    // scratch buffer. The common Q8 representation uses one seed-repeat
+    // kernel for the whole block; other formats retain the per-row fallback.
+    embed_dflash_seed_mask_block(
+        gpu, target, draft_scratch, seed_token, mask_token, b, h,
+    )?;
 
     // ── 3. Position arrays + optional context slice ─────────────────────
     // Q positions: the absolute positions of the block slots,
@@ -3346,29 +3378,10 @@ fn run_dflash_draft_for_logits(
     let mask_token = draft_cfg.mask_token_id;
     assert!(b >= 2, "dflash draft: b must be ≥ 2");
 
-    // Block: [seed, mask, mask, ...].
-    let mut block: Vec<u32> = vec![mask_token; b];
-    block[0] = seed_token;
-
-    // Step 1: D2D embedding lookup per block slot (parallels spec_step_dflash).
-    for (i, &tok) in block.iter().enumerate() {
-        let dst = draft_scratch.x.sub_offset(i * h, h);
-        match target.weights.embd_format {
-            hipfire_runtime::llama::EmbeddingFormat::HFQ4G256 => {
-                gpu.embedding_lookup_hfq4g256(&target.weights.token_embd, &dst, tok, h)?
-            }
-            hipfire_runtime::llama::EmbeddingFormat::HFQ4G128 => {
-                gpu.embedding_lookup_hfq4g128(&target.weights.token_embd, &dst, tok, h)?
-            }
-            hipfire_runtime::llama::EmbeddingFormat::Q8_0 => {
-                gpu.embedding_lookup_q8(&target.weights.token_embd, &dst, tok, h)?
-            }
-            hipfire_runtime::llama::EmbeddingFormat::F32 => {
-                gpu.embedding_lookup(&target.weights.token_embd, &dst, tok, h)?
-            }
-            _ => panic!("ddtree draft: unsupported target embedding format"),
-        }
-    }
+    // Step 1: embed the seed-plus-mask block (shared with vanilla DFlash).
+    embed_dflash_seed_mask_block(
+        gpu, target, draft_scratch, seed_token, mask_token, b, h,
+    )?;
 
     // Step 2: Positions + optional ctx_slice (identical to spec_step_dflash).
     let effective_ctx_len = match ctx_slice {
@@ -3517,30 +3530,11 @@ fn run_dflash_draft_for_topk_gpu(
     assert!(b >= 2, "dflash draft: b must be ≥ 2");
     assert!(k >= 1 && k <= 8, "topk k={} must be in [1, 8]", k);
 
-    // Step 1-3: identical to run_dflash_draft_for_logits — embed, positions,
-    // draft forward. Duplicating the small glue to avoid a refactor risk;
-    // this path is shipped after. (Could factor out, but the savings is <50
-    // lines and the call site is stable.)
-    let mut block: Vec<u32> = vec![mask_token; b];
-    block[0] = seed_token;
-    for (i, &tok) in block.iter().enumerate() {
-        let dst = draft_scratch.x.sub_offset(i * h, h);
-        match target.weights.embd_format {
-            hipfire_runtime::llama::EmbeddingFormat::HFQ4G256 => {
-                gpu.embedding_lookup_hfq4g256(&target.weights.token_embd, &dst, tok, h)?
-            }
-            hipfire_runtime::llama::EmbeddingFormat::HFQ4G128 => {
-                gpu.embedding_lookup_hfq4g128(&target.weights.token_embd, &dst, tok, h)?
-            }
-            hipfire_runtime::llama::EmbeddingFormat::Q8_0 => {
-                gpu.embedding_lookup_q8(&target.weights.token_embd, &dst, tok, h)?
-            }
-            hipfire_runtime::llama::EmbeddingFormat::F32 => {
-                gpu.embedding_lookup(&target.weights.token_embd, &dst, tok, h)?
-            }
-            _ => panic!("ddtree draft: unsupported target embedding format"),
-        }
-    }
+    // Step 1-3: embed the shared seed-plus-mask shape, then build positions
+    // and run the draft forward.
+    embed_dflash_seed_mask_block(
+        gpu, target, draft_scratch, seed_token, mask_token, b, h,
+    )?;
     let effective_ctx_len = match ctx_slice {
         Some(n) => n.min(position),
         None => position,

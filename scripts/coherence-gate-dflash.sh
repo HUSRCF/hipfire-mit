@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Coherence battery — DFlash + DDTree variant.
 #
 # Sibling to coherence-gate.sh (which only exercises target-only AR decode
@@ -75,7 +76,7 @@ else
     for src in crates/hipfire-arch-qwen35/src/qwen35.rs crates/hipfire-runtime/src/llama.rs \
                crates/hipfire-runtime/src/dflash.rs crates/hipfire-arch-qwen35/src/speculative.rs \
                crates/hipfire-runtime/src/ddtree.rs crates/hipfire-runtime/examples/dflash_spec_demo.rs \
-               crates/rdna-compute/src/dispatch.rs; do
+               crates/rdna-compute/src/dispatch.rs kernels/src/embedding_q8_batched.hip; do
         if [ -f "$src" ] && [ "$src" -nt "$EXE" ]; then
             rebuild=1
             break
@@ -289,6 +290,34 @@ for entry in "${tests[@]}"; do
 
     # Pull stats lines (emitted/τ/cycles/accept_rate) for the report.
     stats=$(grep -aE '^emitted:|^cycles:|^accept_rate:' "$out_file" | head -3)
+    # HIPFIRE_SPEC_PHASES=1 emits one synchronized phase line per cycle.
+    # Reduce those lines before deleting the raw log so performance batches
+    # retain a compact, directly comparable draft/verify/total breakdown.
+    phase_stats=$(awk '
+        /^\[phase\]/ {
+            cycles += 1
+            for (i = 1; i <= NF; i++) {
+                value = $i
+                if (value ~ /^B=/) {
+                    sub(/^B=/, "", value); sub(/[^0-9.].*$/, "", value); b_sum += value
+                } else if (value ~ /^accept=/) {
+                    sub(/^accept=/, "", value); sub(/[^0-9.].*$/, "", value); accept_sum += value
+                } else if (value ~ /^draft=/) {
+                    sub(/^draft=/, "", value); sub(/[^0-9.].*$/, "", value); draft_sum += value
+                } else if (value ~ /^verify=/) {
+                    sub(/^verify=/, "", value); sub(/[^0-9.].*$/, "", value); verify_sum += value
+                } else if (value ~ /^total=/) {
+                    sub(/^total=/, "", value); sub(/[^0-9.].*$/, "", value); total_sum += value
+                }
+            }
+        }
+        END {
+            if (cycles > 0) {
+                printf "phase_cycles=%d mean_B=%.2f mean_accept=%.2f mean_draft_us=%.1f mean_verify_us=%.1f mean_total_us=%.1f", \
+                    cycles, b_sum/cycles, accept_sum/cycles, draft_sum/cycles, verify_sum/cycles, total_sum/cycles
+            }
+        }
+    ' "$out_file")
 
     {
         echo "## $label ($mode)"
@@ -300,6 +329,9 @@ for entry in "${tests[@]}"; do
             echo '  ```'
             echo "$stats" | sed 's/^/  /'
             echo '  ```'
+        fi
+        if [ -n "$phase_stats" ]; then
+            echo "- phase stats: \`$phase_stats\`"
         fi
         if [ -n "$panic" ]; then
             echo

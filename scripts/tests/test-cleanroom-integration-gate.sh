@@ -8,7 +8,7 @@ gate="./scripts/cleanroom-integration-gate.sh"
 bash -n "$gate"
 "$gate" --self-check >/dev/null
 
-cpu_expected=$'source-diff-check\nworkspace-tests\nworkspace-examples\nbind-thread-audit\narchitecture-adapter-audit\nhfq-consumer-shape-audit\ntokenizer-special-scan-audit\ngeneration-semantics-audit\nagentic-detector-self-check\ncleanroom-license'
+cpu_expected=$'source-diff-check\nworkspace-tests\nworkspace-examples\nbind-thread-audit\narchitecture-adapter-audit\nhfq-consumer-shape-audit\ntokenizer-special-scan-audit\nspeculative-embedding-audit\ngeneration-semantics-audit\nagentic-detector-self-check\ncleanroom-license'
 cpu_actual="$($gate --cpu-only --print-plan)"
 if [ "$cpu_actual" != "$cpu_expected" ]; then
     echo "test-cleanroom-integration-gate: CPU plan drift" >&2

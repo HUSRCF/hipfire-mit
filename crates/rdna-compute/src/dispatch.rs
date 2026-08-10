@@ -2112,6 +2112,53 @@ impl Gpu {
         )
     }
 
+    /// Batched Q8_0 lookup for a block whose first row is `seed_token_id`
+    /// and whose remaining rows all use `repeat_token_id`. This is the input
+    /// shape used by mask-based speculative drafters and collapses N serial
+    /// lookups to one launch without uploading a token-id array.
+    pub fn embedding_lookup_q8_seed_repeat(
+        &mut self,
+        table: &GpuTensor,
+        output: &GpuTensor,
+        seed_token_id: u32,
+        repeat_token_id: u32,
+        n: usize,
+        dim: usize,
+    ) -> HipResult<()> {
+        self.bind_thread()?;
+        assert!(n >= 1, "seed-repeat embedding requires at least one row");
+        self.ensure_kernel(
+            "embedding_q8_seed_repeat",
+            kernels::EMBEDDING_Q8_BATCHED_SRC,
+            "embedding_q8_seed_repeat",
+        )?;
+
+        let func = &self.functions["embedding_q8_seed_repeat"];
+        let mut tp = table.buf.as_ptr();
+        let mut op = output.buf.as_ptr();
+        let mut seed = seed_token_id as i32;
+        let mut repeat = repeat_token_id as i32;
+        let mut d = dim as i32;
+        let mut params: Vec<*mut c_void> = vec![
+            &mut tp as *mut _ as *mut c_void,
+            &mut op as *mut _ as *mut c_void,
+            &mut seed as *mut _ as *mut c_void,
+            &mut repeat as *mut _ as *mut c_void,
+            &mut d as *mut _ as *mut c_void,
+        ];
+
+        unsafe {
+            self.hip.launch_kernel(
+                func,
+                [n as u32, 1, 1],
+                [256, 1, 1],
+                0,
+                self.stream_ref(),
+                &mut params,
+            )
+        }
+    }
+
     /// Batched HFQ4-G256 embedding lookup. Dequantizes N rows in a single
     /// launch, reading token ids from a device buffer. hipGraph-capture-safe:
     /// callers update `token_ids` between replays and replay the same graph.

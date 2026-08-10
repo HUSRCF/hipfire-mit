@@ -32,6 +32,7 @@ runtime_examples=(
     --example test_q8kvQA
 )
 compute_examples=(
+    --example test_embedding_q8_seed_repeat
     --example test_gemv_mq3g256_lloyd_tail
     --example test_gemv_hfp4g32
     --example test_gemv_mfp4g32
@@ -122,6 +123,8 @@ run_case "HFP4-G32 GEMV tail groups" \
     ./target/release/examples/test_gemv_hfp4g32
 run_case "MFP4-G32 rotated GEMV tail groups" \
     ./target/release/examples/test_gemv_mfp4g32
+run_case "Q8 speculative seed-repeat embedding" \
+    ./target/release/examples/test_embedding_q8_seed_repeat
 
 echo
 echo "quant parity report: $OUT"
@@ -129,4 +132,4 @@ if [ "$failures" -ne 0 ]; then
     echo "quant-parity-gate: $failures case(s) failed" >&2
     exit 1
 fi
-echo "quant-parity-gate: all 10 cases passed"
+echo "quant-parity-gate: all 11 cases passed"
