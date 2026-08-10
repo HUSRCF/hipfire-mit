@@ -2,13 +2,35 @@
 //! High-level GPU dispatch interface.
 //! Manages compiled kernels, provides typed tensor operations.
 
-use crate::compiler::KernelCompiler;
+use crate::compiler::{KernelArtifactDiagnostic, KernelCompiler};
 use crate::kernels;
-use hip_bridge::{DeviceBuffer, HipResult, HipRuntime, Rocblas};
+use hip_bridge::{DeviceBuffer, HipError, HipResult, HipRuntime, Rocblas};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
+use std::path::Path;
 use std::sync::OnceLock;
+
+fn kernel_stage_error(
+    error: HipError,
+    stage: &str,
+    module: &str,
+    function: &str,
+    arch: &str,
+    artifact: Option<&Path>,
+) -> HipError {
+    let artifact = artifact
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "unavailable".to_string());
+    HipError {
+        code: error.code,
+        message: format!(
+            "kernel initialization failed: stage={stage} module={module} function={function} \
+             arch={arch} artifact={artifact}: {}",
+            error.message
+        ),
+    }
+}
 
 fn normalize_target_arch(raw: &str, allow_generic: bool) -> Option<String> {
     let normalized = raw.trim().to_ascii_lowercase();
@@ -1449,16 +1471,28 @@ impl Gpu {
             return Ok(());
         }
 
-        let obj_path = self.compiler.compile(module_name, source)?;
-        let obj_path_str = obj_path.to_str().unwrap().to_string();
+        let obj_path = self.compiler.compile(module_name, source)
+            .map_err(|error| kernel_stage_error(
+                error, "compile", module_name, func_name, &self.arch, None,
+            ))?
+            .to_path_buf();
+        let obj_path_str = obj_path.to_string_lossy().into_owned();
 
         if !self.modules.contains_key(module_name) {
-            let module = self.hip.module_load(&obj_path_str)?;
+            let module = self.hip.module_load(&obj_path_str).map_err(|error| {
+                kernel_stage_error(
+                    error, "module_load", module_name, func_name, &self.arch, Some(&obj_path),
+                )
+            })?;
             self.modules.insert(module_name.to_string(), module);
         }
 
         let module = &self.modules[module_name];
-        let func = self.hip.module_get_function(module, func_name)?;
+        let func = self.hip.module_get_function(module, func_name).map_err(|error| {
+            kernel_stage_error(
+                error, "function_lookup", module_name, func_name, &self.arch, Some(&obj_path),
+            )
+        })?;
         self.functions.insert(func_name.to_string(), func);
         Ok(())
     }
@@ -19864,6 +19898,15 @@ impl Gpu {
             cu_hint,
         )
     }
+
+    /// Return deterministic kernel artifact provenance for diagnostics.
+    ///
+    /// Records are created during compilation/cache selection and this query
+    /// does not add work to kernel launches.
+    pub fn kernel_artifact_diagnostics(&self) -> Vec<KernelArtifactDiagnostic> {
+        // bind_thread: skip — pure host-side state query
+        self.compiler.artifact_diagnostics()
+    }
 }
 
 impl Drop for Gpu {
@@ -19880,7 +19923,9 @@ impl Drop for Gpu {
 
 #[cfg(test)]
 mod target_arch_tests {
-    use super::{minimum_hip_version, resolve_target_arch};
+    use super::{kernel_stage_error, minimum_hip_version, resolve_target_arch};
+    use hip_bridge::HipError;
+    use std::path::Path;
 
     #[test]
     fn detected_arch_is_canonicalized_without_feature_suffixes() {
@@ -19927,5 +19972,36 @@ mod target_arch_tests {
         assert_eq!(minimum_hip_version("gfx1152"), (7, 2));
         assert_eq!(minimum_hip_version("gfx1201"), (6, 4));
         assert_eq!(minimum_hip_version("gfx12-generic"), (6, 4));
+    }
+
+    #[test]
+    fn kernel_failure_context_identifies_initialization_stage() {
+        for (stage, artifact, expected_artifact) in [
+            ("compile", None, "artifact=unavailable"),
+            ("module_load", Some(Path::new("cache/mq8_module.hsaco")),
+                "artifact=cache/mq8_module.hsaco"),
+            ("function_lookup", Some(Path::new("cache/mq8_module.hsaco")),
+                "artifact=cache/mq8_module.hsaco"),
+        ] {
+            let wrapped = kernel_stage_error(
+                HipError::new(321, "symbol missing"),
+                stage,
+                "mq8_module",
+                "gemv_mq8",
+                "gfx1100",
+                artifact,
+            );
+            assert_eq!(wrapped.code, 321);
+            for field in [
+                format!("stage={stage}"),
+                "module=mq8_module".to_string(),
+                "function=gemv_mq8".to_string(),
+                "arch=gfx1100".to_string(),
+                expected_artifact.to_string(),
+                "symbol missing".to_string(),
+            ] {
+                assert!(wrapped.message.contains(&field), "missing {field}");
+            }
+        }
     }
 }

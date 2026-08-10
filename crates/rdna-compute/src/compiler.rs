@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Compile HIP kernels to code objects (.hsaco) via hipcc.
 //! Supports pre-compiled .hsaco blobs for deployment without ROCm SDK.
 
@@ -11,6 +12,40 @@ use std::thread;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+
+/// Provenance of the code object selected for one kernel module.
+///
+/// This is recorded during kernel initialization so cache and packaging
+/// failures can be isolated without adding work to the launch hot path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KernelArtifactOrigin {
+    ValidatedPrecompiled,
+    UnvalidatedPrecompiled,
+    ValidatedCache,
+    RuntimeCompiled,
+}
+
+impl KernelArtifactOrigin {
+    pub fn is_validated(self) -> bool {
+        !matches!(self, Self::UnvalidatedPrecompiled)
+    }
+}
+
+/// Source-free diagnostic snapshot for a selected kernel artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KernelArtifactDiagnostic {
+    pub module: String,
+    pub arch: String,
+    pub source_arch_hash: String,
+    pub path: PathBuf,
+    pub origin: KernelArtifactOrigin,
+}
+
+impl KernelArtifactDiagnostic {
+    pub fn validated(&self) -> bool {
+        self.origin.is_validated()
+    }
+}
 
 /// Copy .hsaco and .hash files from the persistent install location (cold)
 /// into the tmpfs hot path. Used once at KernelCompiler startup to seed the
@@ -73,6 +108,7 @@ pub struct KernelCompiler {
     cache_dir: PathBuf,
     arch: String,
     compiled: HashMap<String, PathBuf>,
+    diagnostics: HashMap<String, KernelArtifactDiagnostic>,
     precompiled_dir: Option<PathBuf>,
     has_hipcc: bool,
 }
@@ -148,6 +184,7 @@ impl KernelCompiler {
             cache_dir,
             arch: arch.to_string(),
             compiled: HashMap::new(),
+            diagnostics: HashMap::new(),
             precompiled_dir,
             has_hipcc,
         })
@@ -158,6 +195,39 @@ impl KernelCompiler {
         &self.compiled
     }
 
+    /// Return artifact provenance in deterministic module-name order.
+    pub fn artifact_diagnostics(&self) -> Vec<KernelArtifactDiagnostic> {
+        let mut records: Vec<_> = self.diagnostics.values().cloned().collect();
+        records.sort_by(|a, b| a.module.cmp(&b.module));
+        records
+    }
+
+    fn source_arch_hash(arch: &str, source: &str) -> String {
+        let mut hasher = DefaultHasher::new();
+        source.hash(&mut hasher);
+        arch.hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
+    }
+
+    fn record_artifact(
+        &mut self,
+        module: &str,
+        source_arch_hash: &str,
+        path: PathBuf,
+        origin: KernelArtifactOrigin,
+    ) {
+        self.diagnostics.insert(
+            module.to_string(),
+            KernelArtifactDiagnostic {
+                module: module.to_string(),
+                arch: self.arch.clone(),
+                source_arch_hash: source_arch_hash.to_string(),
+                path,
+                origin,
+            },
+        );
+    }
+
     /// Compile a HIP kernel source string. Returns path to .hsaco file.
     /// Tries pre-compiled blob first (with hash validation), falls back to hipcc.
     pub fn compile(&mut self, name: &str, source: &str) -> HipResult<&Path> {
@@ -166,10 +236,7 @@ impl KernelCompiler {
         }
 
         // Hash source + arch for cache validation (used by both pre-compiled and runtime paths)
-        let mut hasher = DefaultHasher::new();
-        source.hash(&mut hasher);
-        self.arch.hash(&mut hasher);
-        let src_hash = format!("{:016x}", hasher.finish());
+        let src_hash = Self::source_arch_hash(&self.arch, source);
 
         // Try pre-compiled .hsaco first, validating with a .hash sidecar file.
         // If hash is missing/mismatched AND hipcc is available, prefer recompilation.
@@ -184,14 +251,26 @@ impl KernelCompiler {
                     stored.trim() == src_hash
                 };
                 if hash_ok {
-                    self.compiled.insert(name.to_string(), precompiled);
+                    self.compiled.insert(name.to_string(), precompiled.clone());
+                    self.record_artifact(
+                        name,
+                        &src_hash,
+                        precompiled,
+                        KernelArtifactOrigin::ValidatedPrecompiled,
+                    );
                     return Ok(&self.compiled[name]);
                 }
                 // No valid hash — only reject if hipcc can recompile
                 if !self.has_hipcc {
                     eprintln!("  WARNING: {name}: using UNVALIDATED pre-compiled blob (hipcc unavailable)");
                     eprintln!("           Output may be incorrect. Install ROCm SDK or rebuild blobs with matching hashes.");
-                    self.compiled.insert(name.to_string(), precompiled);
+                    self.compiled.insert(name.to_string(), precompiled.clone());
+                    self.record_artifact(
+                        name,
+                        &src_hash,
+                        precompiled,
+                        KernelArtifactOrigin::UnvalidatedPrecompiled,
+                    );
                     return Ok(&self.compiled[name]);
                 }
                 eprintln!("  {name}: pre-compiled blob has no hash file, recompiling");
@@ -206,10 +285,13 @@ impl KernelCompiler {
         let cache_valid = obj_path.exists() && hash_path.exists()
             && std::fs::read_to_string(&hash_path).unwrap_or_default() == src_hash;
 
-        if !cache_valid {
+        let origin = if cache_valid {
+            KernelArtifactOrigin::ValidatedCache
+        } else {
             Self::hipcc_compile(&self.arch, &src_path, &obj_path, name, source)?;
             let _ = std::fs::write(&hash_path, &src_hash);
-        }
+            KernelArtifactOrigin::RuntimeCompiled
+        };
 
         // Ensure precompiled dir has valid hash + blob (writeback from cache or fresh compile)
         if let Some(ref dir) = self.precompiled_dir {
@@ -225,7 +307,8 @@ impl KernelCompiler {
             }
         }
 
-        self.compiled.insert(name.to_string(), obj_path);
+        self.compiled.insert(name.to_string(), obj_path.clone());
+        self.record_artifact(name, &src_hash, obj_path, origin);
         Ok(&self.compiled[name])
     }
 
@@ -365,10 +448,7 @@ impl KernelCompiler {
                 continue;
             }
 
-            let mut hasher = DefaultHasher::new();
-            source.hash(&mut hasher);
-            self.arch.hash(&mut hasher);
-            let src_hash = format!("{:016x}", hasher.finish());
+            let src_hash = Self::source_arch_hash(&self.arch, source);
 
             // Check precompiled with valid hash
             if let Some(ref dir) = self.precompiled_dir {
@@ -380,11 +460,23 @@ impl KernelCompiler {
                         stored.trim() == src_hash
                     };
                     if hash_ok {
-                        self.compiled.insert(name.to_string(), precompiled);
+                        self.compiled.insert(name.to_string(), precompiled.clone());
+                        self.record_artifact(
+                            name,
+                            &src_hash,
+                            precompiled,
+                            KernelArtifactOrigin::ValidatedPrecompiled,
+                        );
                         continue;
                     }
                     if !self.has_hipcc {
-                        self.compiled.insert(name.to_string(), precompiled);
+                        self.compiled.insert(name.to_string(), precompiled.clone());
+                        self.record_artifact(
+                            name,
+                            &src_hash,
+                            precompiled,
+                            KernelArtifactOrigin::UnvalidatedPrecompiled,
+                        );
                         continue;
                     }
                 }
@@ -412,7 +504,13 @@ impl KernelCompiler {
                         let _ = std::fs::write(&pre_hash, &src_hash);
                     }
                 }
-                self.compiled.insert(name.to_string(), obj_path);
+                self.compiled.insert(name.to_string(), obj_path.clone());
+                self.record_artifact(
+                    name,
+                    &src_hash,
+                    obj_path,
+                    KernelArtifactOrigin::ValidatedCache,
+                );
                 continue;
             }
 
@@ -456,17 +554,23 @@ impl KernelCompiler {
                 let i = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 let marker = if result.is_ok() { "✓" } else { "✗" };
                 eprintln!("  [{i:>3}/{n}] {marker} {name}");
-                (name, obj_path, result)
+                (name, src_hash, obj_path, result)
             });
             handle
         }).collect();
 
         let mut errors = Vec::new();
         for handle in results {
-            let (name, obj_path, result) = handle.join().unwrap();
+            let (name, source_hash, obj_path, result) = handle.join().unwrap();
             match result {
                 Ok(()) => {
-                    self.compiled.insert(name, obj_path);
+                    self.compiled.insert(name.clone(), obj_path.clone());
+                    self.record_artifact(
+                        &name,
+                        &source_hash,
+                        obj_path,
+                        KernelArtifactOrigin::RuntimeCompiled,
+                    );
                 }
                 Err(e) => errors.push(e),
             }
@@ -477,5 +581,63 @@ impl KernelCompiler {
             return Err(e);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{KernelArtifactDiagnostic, KernelArtifactOrigin, KernelCompiler};
+    use std::path::PathBuf;
+
+    #[test]
+    fn source_identity_includes_arch_and_source() {
+        let base = KernelCompiler::source_arch_hash("gfx1100", "kernel-a");
+        assert_eq!(base, KernelCompiler::source_arch_hash("gfx1100", "kernel-a"));
+        assert_ne!(base, KernelCompiler::source_arch_hash("gfx1101", "kernel-a"));
+        assert_ne!(base, KernelCompiler::source_arch_hash("gfx1100", "kernel-b"));
+    }
+
+    #[test]
+    fn validation_flag_matches_artifact_origin() {
+        for origin in [
+            KernelArtifactOrigin::ValidatedPrecompiled,
+            KernelArtifactOrigin::ValidatedCache,
+            KernelArtifactOrigin::RuntimeCompiled,
+        ] {
+            assert!(origin.is_validated());
+        }
+        assert!(!KernelArtifactOrigin::UnvalidatedPrecompiled.is_validated());
+    }
+
+    #[test]
+    fn artifact_diagnostics_are_sorted_without_kernel_source() {
+        let mut compiler = KernelCompiler {
+            cache_dir: PathBuf::from("cache"),
+            arch: "gfx1100".to_string(),
+            compiled: Default::default(),
+            diagnostics: Default::default(),
+            precompiled_dir: None,
+            has_hipcc: false,
+        };
+        for module in ["z_kernel", "a_kernel"] {
+            compiler.record_artifact(
+                module,
+                "0123456789abcdef",
+                PathBuf::from(format!("cache/{module}.hsaco")),
+                KernelArtifactOrigin::ValidatedCache,
+            );
+        }
+
+        let records = compiler.artifact_diagnostics();
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.module.as_str())
+                .collect::<Vec<_>>(),
+            ["a_kernel", "z_kernel"]
+        );
+        assert!(records.iter().all(|record: &KernelArtifactDiagnostic| {
+            record.validated() && record.source_arch_hash == "0123456789abcdef"
+        }));
     }
 }
