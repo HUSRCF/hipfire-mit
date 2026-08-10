@@ -834,3 +834,69 @@ decode tok/s.
 - Decision: accept independent parity for the remaining compact HFQ GEMV and
   MQ2-Lloyd paths as the eighth M3 deliverable. Model-level format quality and
   unexercised fused/batched variants remain open.
+
+---
+
+## M3: MQ8 gfx11 execution and MQ4/MQ8 parity closure — 2026-08-10
+
+### Run identity
+
+- Regression parent: `221a2efc11644f11f7981db32e78936a39bbcc43`.
+- Candidate commit: `a36f989635a531dbff5a5e61e7f3e0e416c7de0c`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Candidate benchmark md5: `c4a3eb86f27b00a88a32a7e32361f64c`.
+- Candidate daemon md5: `dbc7a5fdf00c9038992933f29696150b`.
+- Candidate DFlash md5: `fe1ee567a4b1ab04363090f8bb15696d`.
+- Expanded MQ parity anchor md5: `125c2f207f04fdef32a95a29a41676be`.
+- Environment: GPU0-only visibility and the same ROCm 7.14 library,
+  model-directory, W7900 baseline, and `scripts/gpu-lock.sh` serialization
+  used by the preceding M3 runs.
+- Correctness commands: `cargo test --workspace --all-targets`,
+  `cargo check --workspace --examples`, `./scripts/cleanroom-gate.sh`,
+  `./scripts/quant-parity-gate.sh`, `./scripts/coherence-gate.sh`, and
+  `./scripts/coherence-gate-dflash.sh`.
+- Performance command: three fresh invocations of
+  `./scripts/speed-gate.sh --fast`; each observation is best-of-two.
+
+### Measurements
+
+| Metric | Committed floor | Candidate observation 1 | Candidate observation 2 | Candidate observation 3 | Candidate median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1345.1 | 1314.1 | 1382.9 | 1345.1 |
+| 4B MQ4 decode tok/s | 140.9 | 140.5 | 140.0 | 139.8 | 140.0 |
+
+The commit-hook repetition also passed at 1320.3 prefill tok/s and 140.1
+decode tok/s.
+
+### Decision
+
+- Candidate median delta: +9.60% prefill and -0.64% decode. All observations
+  pass the committed 5% regression tolerance. Relative to the preceding
+  testing batch's median, the changes are +3.12% and +0.07%, respectively,
+  so no additional jitter runs were required. The default benchmark exercises
+  MQ4, not MQ8; it establishes non-regression and no MQ8-caused speedup is
+  claimed.
+- gfx1100 compilation: the original direct signed `sdot4` call fails with
+  `needs target feature dot1-insts`. The candidate uses gfx11/gfx12's
+  generalized `sudot4(true, a, true, b, acc, false)` and keeps `sdot4` for
+  earlier supported targets. This matches the locally installed ROCm 7.14
+  signed-int8 inner-product interface.
+- MQ8 numerical parity: maximum absolute errors are `1.525879e-5`,
+  `6.103516e-5`, and `1.220703e-4` at K=256, 512, and 1024, below `1e-3`.
+  MQ4 reports `7.629395e-5`, `3.051758e-4`, and `1.220703e-3`, below its
+  explicit `2e-3` FP32-reduction budget. Standalone FWHT is element-exact.
+- Unified GPU0 parity: all ten cases pass. Reports:
+  `/tmp/quant-parity-mq4-mq8-pass.md` and commit-hook repetition
+  `/tmp/quant-parity-20260810-102517.md`.
+- Standard GPU0 coherence: four available cells pass after manual review.
+  Reports: `/tmp/coherence-mq8-gfx11.md` and hook repetition
+  `/tmp/coherence-20260810-102519.md`.
+- DFlash/DDTree GPU0 coherence: all four cells report `ok=true` and
+  `soft_warn=false`; prose and code outputs were manually reviewed. Report:
+  `/tmp/coherence-dflash-mq8-gfx11.md`.
+- Agentic commit-hook quality: Qwen3.6 27B emits valid `name='read'` JSON with
+  zero warnings. Report: `/tmp/agentic-gate-20260810-102536.md`.
+- Decision: accept MQ8 execution on gfx11 and independent MQ8/MQ4 parity as
+  the ninth M3 deliverable. Model-level format quality and fused/batched
+  execution variants remain open.

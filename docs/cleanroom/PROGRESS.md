@@ -16,7 +16,7 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M0: governance and reproducibility | 1-2 | complete | MIT/source gate, clean-room PR declaration, build and performance baselines |
 | M1: speculative decode foundation | 3-8 | complete | shared greedy acceptance contract, semantic statistics, deterministic tests, and GPU0 correctness/throughput acceptance |
 | M2: release and device execution | 10-18 | in progress | reproducible delivery and the device-execution foundation are complete; remaining quantization, maintenance, and integration directions are still open |
-| M3: quantization and context paths | 19-39 | in progress | strict HFQ boundaries and quant-payload layouts, ten-cell GPU/CPU quant parity gating, shared packed-KV allocation, and checked long-context position continuity are complete; full model-level format fidelity remains open |
+| M3: quantization and context paths | 19-42 | in progress | strict HFQ boundaries and quant-payload layouts, ten-cell GPU/CPU quant parity gating including MQ8/MQ4, shared packed-KV allocation, and checked long-context position continuity are complete; full model-level format fidelity remains open |
 
 ## M0 evidence
 
@@ -382,3 +382,40 @@ W7900 floor; the hook repetition also passes. The inference executable hashes
 are unchanged because this batch adds only a numerical test, so the values
 establish non-regression and no speedup is attributed. Detailed evidence is
 in `docs/cleanroom/PERFORMANCE_RECORD.md`.
+
+### MQ8 gfx11 execution and MQ4/MQ8 parity closure
+
+Commit `a36f989635a531dbff5a5e61e7f3e0e416c7de0c` closes the final
+registered integer-MQ GEMV gaps in the synthetic parity anchor. The audit
+found that the MQ8 kernel called the signed `sdot4` builtin directly, which
+the local ROCm 7.14 compiler rejects for `gfx1100` because that target does
+not expose the older `dot1-insts` feature. The kernel now uses gfx11/gfx12's
+generalized six-argument `sudot4` with both operand-sign flags set, while
+gfx9/gfx10 retain their existing signed `sdot4` path.
+
+The MQ anchor now independently constructs MQ8-G256 and MQ4-G256 weights,
+rotates and quantizes activations for MQ8, decodes both payloads on the CPU,
+and compares them with GPU rotate-plus-GEMV at K=256, 512, and 1024. On GPU0,
+MQ8's maximum absolute error is `1.220703e-4` under its `1e-3` budget. MQ4's
+maximum is `1.220703e-3` under a format-specific `2e-3` budget that accounts
+for its 32-lane FP32 tree reduction versus the independent serial CPU sum.
+The isolated FWHT remains element-exact at every shape. The complete
+ten-cell quantization battery passes.
+
+The full workspace all-target test suite, every workspace example check, and
+the clean-room source/license gate pass. Four available standard coherence
+cells and all four DFlash/DDTree cells pass after manual review; speculative
+detectors are `ok=true` with `soft_warn=false`. The commit-hook agentic cell
+also emits valid `read` JSON with no warnings.
+
+Three fresh GPU0 performance observations have median 1345.1 prefill tok/s
+and 140.0 decode tok/s, respectively +9.60% and -0.64% versus the committed
+W7900 floor. The hook repetition passes at 1320.3 and 140.1 tok/s. The MQ4
+benchmark establishes default-path non-regression; no speedup is attributed
+to the MQ8-only execution repair. Detailed evidence is in
+`docs/cleanroom/PERFORMANCE_RECORD.md`.
+
+The conservative direction-table position is now complete through row 42 of
+2706; row 43 is next. Direction rows are audit inputs and are aggregated into
+independently specified implementation batches, so the remaining 2664 rows
+are not a promise of 2664 one-to-one Git commits.
