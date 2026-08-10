@@ -4,7 +4,7 @@
 use crate::llama::{
     f16_to_f32, EmbeddingFormat, LayerWeights, LlamaConfig, LlamaWeights, ModelArch, WeightTensor,
 };
-use hip_bridge::HipResult;
+use hip_bridge::{HipError, HipResult};
 use memmap2::Mmap;
 use rdna_compute::{DType, Gpu, GpuTensor};
 use std::collections::HashMap;
@@ -34,11 +34,57 @@ fn fadvise_dontneed(_fd: i32, _offset: usize, _len: usize) {}
 
 pub struct HfqTensorInfo {
     pub name: String,
-    pub quant_type: u8, // 0=Q4F16G64, 1=F16, 2=F32
+    /// HFQ wire-format identifier; layout validation below owns the registry.
+    pub quant_type: u8,
     pub shape: Vec<u32>,
     pub group_size: u32,
     pub data_offset: usize,
     pub data_size: usize,
+}
+
+impl HfqTensorInfo {
+    /// Require the file-declared tensor shape to match the model consumer.
+    ///
+    /// Index validation proves that a payload is self-consistent with its own
+    /// declaration. This second, cold-path check binds that declaration to the
+    /// dimensions derived from model configuration before a GPU kernel can use
+    /// `m` and `k` to interpret the bytes.
+    pub fn expect_shape(&self, expected: &[usize]) -> HipResult<()> {
+        let matches = self.shape.len() == expected.len()
+            && self
+                .shape
+                .iter()
+                .zip(expected)
+                .all(|(&actual, &wanted)| actual as usize == wanted);
+        if matches {
+            return Ok(());
+        }
+        Err(HipError::new(
+            0,
+            &format!(
+                "HFQ tensor {:?} shape mismatch: file {:?}, model {:?}",
+                self.name, self.shape, expected
+            ),
+        ))
+    }
+
+    /// Require only the flattened element count when the consumer explicitly
+    /// treats a higher-rank tensor as a vector.
+    pub fn expect_numel(&self, expected: usize) -> HipResult<()> {
+        let actual = self.shape.iter().try_fold(1usize, |numel, &dim| {
+            numel.checked_mul(dim as usize)
+        });
+        if actual == Some(expected) {
+            return Ok(());
+        }
+        Err(HipError::new(
+            0,
+            &format!(
+                "HFQ tensor {:?} element-count mismatch: file {:?} ({actual:?}), model {expected}",
+                self.name, self.shape
+            ),
+        ))
+    }
 }
 
 pub struct HfqFile {
@@ -744,6 +790,7 @@ pub fn config_from_hfq(hfq: &HfqFile) -> Option<LlamaConfig> {
 fn load_f16_tensor(hfq: &HfqFile, gpu: &mut Gpu, st_name: &str, shape: &[usize]) -> HipResult<GpuTensor> {
     let (info, data) = hfq.tensor_data(st_name)
         .unwrap_or_else(|| panic!("tensor not found: {st_name}"));
+    info.expect_shape(shape)?;
 
     let f32_data: Vec<f32> = match info.quant_type {
         1 => { // F16
@@ -766,6 +813,7 @@ fn load_f16_tensor(hfq: &HfqFile, gpu: &mut Gpu, st_name: &str, shape: &[usize])
 fn load_weight_tensor(hfq: &HfqFile, gpu: &Gpu, st_name: &str, m: usize, k: usize) -> HipResult<WeightTensor> {
     let (info, data) = hfq.tensor_data(st_name)
         .unwrap_or_else(|| panic!("tensor not found: {st_name}"));
+    info.expect_shape(&[m, k])?;
 
     // Phase A Stage A — AWQ sidecar lookup. The quantizer emits per-tensor
     // sidecars named `<weight_name>.awq_scale.weight` (1D F16, length K)
@@ -934,6 +982,7 @@ pub fn load_weights_hfq(
     eprintln!("  loading token_embd...");
     let embd_info = hfq.tensor_data("model.embed_tokens.weight")
         .expect("embed_tokens not found");
+    embd_info.0.expect_shape(&[config.vocab_size, config.dim])?;
     let (token_embd, embd_fmt) = if embd_info.0.quant_type == 4 {
         // Q4_K: upload raw, use Q4K embedding lookup at inference
         eprintln!("    (Q4K raw, {} MB)", embd_info.1.len() / 1_000_000);
@@ -1161,6 +1210,29 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("unsupported quant_type 22"));
+    }
+
+    #[test]
+    fn consumer_shape_contract_rejects_config_mismatch() {
+        let info = HfqTensorInfo {
+            name: "model.layers.0.mlp.gate_proj.weight".into(),
+            quant_type: 13,
+            shape: vec![64, 256],
+            group_size: 256,
+            data_offset: 0,
+            data_size: 64 * 136,
+        };
+
+        info.expect_shape(&[64, 256]).expect("exact shape");
+        info.expect_numel(64 * 256).expect("flattened element count");
+
+        let error = info.expect_shape(&[32, 512]).unwrap_err().to_string();
+        assert!(error.contains("shape mismatch"));
+        assert!(error.contains("[64, 256]"));
+        assert!(error.contains("[32, 512]"));
+
+        let error = info.expect_numel(64 * 255).unwrap_err().to_string();
+        assert!(error.contains("element-count mismatch"));
     }
 
     #[test]

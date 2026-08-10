@@ -29,6 +29,7 @@ CPU_STEPS=(
     workspace-examples
     bind-thread-audit
     architecture-adapter-audit
+    hfq-consumer-shape-audit
     generation-semantics-audit
     agentic-detector-self-check
     cleanroom-license
@@ -47,6 +48,7 @@ REQUIRED_SCRIPTS=(
     scripts/quant-parity-gate.sh
     scripts/speed-gate.sh
     scripts/verify-architecture-adapters.sh
+    scripts/verify-hfq-consumer-shapes.sh
     scripts/verify-generation-semantics.sh
     scripts/verify-bind-thread.sh
 )
@@ -190,6 +192,7 @@ execute_step() {
         workspace-examples) cargo check --workspace --locked --examples ;;
         bind-thread-audit) ./scripts/verify-bind-thread.sh ;;
         architecture-adapter-audit) ./scripts/verify-architecture-adapters.sh ;;
+        hfq-consumer-shape-audit) ./scripts/verify-hfq-consumer-shapes.sh ;;
         generation-semantics-audit) ./scripts/verify-generation-semantics.sh ;;
         agentic-detector-self-check) ./scripts/agentic-gate.sh --self-check ;;
         cleanroom-license) ./scripts/cleanroom-gate.sh ;;

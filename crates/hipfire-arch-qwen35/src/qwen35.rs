@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: MIT
 //! Qwen3.5 model: hybrid DeltaNet (linear attention) + standard attention.
 //! Feature-gated behind `deltanet`.
 
-use hipfire_runtime::hfq::HfqFile;
+use hipfire_runtime::hfq::{HfqFile, HfqTensorInfo};
 use hipfire_runtime::llama::{self, f16_to_f32, EmbeddingFormat, WeightTensor, weight_gemv,
                               weight_gemv_prerotated, fused_rmsnorm_rotate_for_mq,
                               fused_rmsnorm_rotate_mq_batched_for,
@@ -717,6 +718,7 @@ fn load_norm_weight(hfq: &HfqFile, gpu: &mut Gpu, name: &str, shape: &[usize]) -
     let (info, data) = hfq.tensor_data_vec(&full_name)
         .or_else(|| hfq.tensor_data_vec(name))
         .unwrap_or_else(|| panic!("tensor not found: {name} or {full_name}"));
+    info.expect_shape(shape)?;
 
     let mut f32_data: Vec<f32> = match info.quant_type {
         1 => data.chunks_exact(2).map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]]))).collect(),
@@ -728,9 +730,10 @@ fn load_norm_weight(hfq: &HfqFile, gpu: &mut Gpu, name: &str, shape: &[usize]) -
     gpu.upload_f32(&f32_data, shape)
 }
 
-/// Load weight tensor from raw bytes + quant_type (no name lookup needed).
-fn load_weight_tensor_raw(gpu: &Gpu, quant_type: u8, data: &[u8], m: usize, k: usize) -> HipResult<WeightTensor> {
-    match quant_type {
+/// Load a weight from raw bytes plus validated HFQ metadata (no name lookup).
+fn load_weight_tensor_raw(gpu: &Gpu, info: &HfqTensorInfo, data: &[u8], m: usize, k: usize) -> HipResult<WeightTensor> {
+    info.expect_shape(&[m, k])?;
+    match info.quant_type {
         6 => {
             let buf = gpu.upload_raw(data, &[data.len()])?;
             Ok(WeightTensor { buf, gpu_dtype: DType::HFQ4G256, m, k, row_stride: 0, awq_scale: None })
@@ -818,7 +821,7 @@ fn load_weight_tensor_raw(gpu: &Gpu, quant_type: u8, data: &[u8], m: usize, k: u
                 Ok(WeightTensor { buf, gpu_dtype: DType::F32, m, k, row_stride: 0, awq_scale: None })
             }
         },
-        _ => panic!("unsupported quant_type {} for lm_head", quant_type),
+        _ => panic!("unsupported quant_type {} for lm_head", info.quant_type),
     }
 }
 
@@ -874,11 +877,9 @@ fn load_weight_tensor(hfq: &HfqFile, gpu: &Gpu, name: &str, m: usize, k: usize) 
     #[cfg(unix)]
     {
         let mut wt = if let Some((info, buf)) = hfq.tensor_data_pread(&full_name) {
-            let qt = info.quant_type;
-            load_weight_tensor_raw(gpu, qt, &buf, m, k)?
+            load_weight_tensor_raw(gpu, info, &buf, m, k)?
         } else if let Some((info, buf)) = hfq.tensor_data_pread(name) {
-            let qt = info.quant_type;
-            load_weight_tensor_raw(gpu, qt, &buf, m, k)?
+            load_weight_tensor_raw(gpu, info, &buf, m, k)?
         } else {
             panic!("tensor not found: {name} or {full_name}");
         };
@@ -898,7 +899,7 @@ fn load_weight_tensor(hfq: &HfqFile, gpu: &Gpu, name: &str, m: usize, k: usize) 
         let (info, data) = hfq.tensor_data(&full_name)
             .or_else(|| hfq.tensor_data(name))
             .unwrap_or_else(|| panic!("tensor not found: {name} or {full_name}"));
-        let mut wt = load_weight_tensor_raw(gpu, info.quant_type, data, m, k)?;
+        let mut wt = load_weight_tensor_raw(gpu, info, data, m, k)?;
         if wt.gpu_dtype.supports_awq_sidecar() {
             wt.awq_scale = load_awq_scale_for(hfq, gpu, &full_name, k)
                 .or_else(|| load_awq_scale_for(hfq, gpu, name, k));
@@ -913,6 +914,7 @@ fn load_any_as_f32(hfq: &HfqFile, gpu: &mut Gpu, name: &str, n: usize) -> HipRes
     let (info, data) = hfq.tensor_data_vec(&full_name)
         .or_else(|| hfq.tensor_data_vec(name))
         .unwrap_or_else(|| panic!("tensor not found: {name} or {full_name}"));
+    info.expect_numel(n)?;
 
     let f32_data: Vec<f32> = match info.quant_type {
         1 => data.chunks_exact(2).map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]]))).collect(),
@@ -1323,6 +1325,7 @@ pub fn load_weights(hfq: &mut HfqFile, config: &Qwen35Config, gpu: &mut Gpu) -> 
     eprintln!("  loading token_embd...");
     let (embd_meta, embd_data) = hfq.tensor_data_vec("model.language_model.embed_tokens.weight")
         .expect("embed_tokens not found");
+    embd_meta.expect_shape(&[config.vocab_size, config.dim])?;
     let embd_qt = embd_meta.quant_type;
     let (token_embd, embd_fmt) = if embd_qt == 6 {
         eprintln!("    (HFQ4-G256 raw, {} MB)", embd_data.len() / 1_000_000);
@@ -1372,10 +1375,11 @@ pub fn load_weights(hfq: &mut HfqFile, config: &Qwen35Config, gpu: &mut Gpu) -> 
         .or_else(|| hfq.tensor_data_vec("model.language_model.lm_head.weight"));
     let mut output = if let Some((lm_info, lm_data)) = lm_head_info {
         eprintln!("  loading output (separate lm_head, qt={})...", lm_info.quant_type);
-        load_weight_tensor_raw(gpu, lm_info.quant_type, &lm_data, config.vocab_size, config.dim)?
+        load_weight_tensor_raw(gpu, lm_info, &lm_data, config.vocab_size, config.dim)?
     } else {
         eprintln!("  loading output (tied embeddings, qt={})...", embd_qt);
-        let (_, tied_data) = hfq.tensor_data_vec("model.language_model.embed_tokens.weight").unwrap();
+        let (tied_info, tied_data) = hfq.tensor_data_vec("model.language_model.embed_tokens.weight").unwrap();
+        tied_info.expect_shape(&[config.vocab_size, config.dim])?;
         if embd_qt == 6 || embd_qt == 7 || embd_qt == 8 {
             let buf = gpu.upload_raw(&tied_data, &[tied_data.len()])?;
             let dtype = match embd_qt {
@@ -1579,6 +1583,7 @@ fn load_token_embd_into(
     let embd_info = hfq
         .tensor_data("model.language_model.embed_tokens.weight")
         .expect("embed_tokens not found");
+    embd_info.0.expect_shape(&[config.vocab_size, config.dim])?;
     Ok(if embd_info.0.quant_type == 6 {
         eprintln!("    (HFQ4-G256 raw, {} MB)", embd_info.1.len() / 1_000_000);
         (gpu.upload_raw(embd_info.1, &[embd_info.1.len()])?, EmbeddingFormat::HFQ4G256)
@@ -1616,11 +1621,12 @@ fn load_output_into(
         .or_else(|| hfq.tensor_data("model.language_model.lm_head.weight"));
     let mut output = if let Some((lm_info, lm_data)) = lm_head_info {
         eprintln!("  loading output (separate lm_head, qt={})...", lm_info.quant_type);
-        load_weight_tensor_raw(gpu, lm_info.quant_type, lm_data, config.vocab_size, config.dim)?
+        load_weight_tensor_raw(gpu, lm_info, lm_data, config.vocab_size, config.dim)?
     } else {
         let embd_info = hfq
             .tensor_data("model.language_model.embed_tokens.weight")
             .expect("embed_tokens not found");
+        embd_info.0.expect_shape(&[config.vocab_size, config.dim])?;
         eprintln!("  loading output (tied embeddings, qt={})...", embd_info.0.quant_type);
         let embd_data = embd_info.1;
         if embd_info.0.quant_type == 6 || embd_info.0.quant_type == 7 || embd_info.0.quant_type == 8 {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! DFlash draft forward pass — native Rust+HIP.
 //!
 //! Minimal dependency surface: only reads HFQ draft files (arch_id = 20),
@@ -159,6 +160,7 @@ fn hfq_tensor_f32(hfq: &HfqFile, gpu: &mut Gpu, name: &str, shape: Vec<usize>) -
     let (info, data) = hfq
         .tensor_data(name)
         .unwrap_or_else(|| panic!("dflash tensor missing: {name}"));
+    info.expect_shape(&shape)?;
     let f32_data: Vec<f32> = match info.quant_type {
         1 => data
             .chunks_exact(2)
@@ -195,6 +197,7 @@ fn hfq_weight(hfq: &HfqFile, gpu: &mut Gpu, name: &str, m: usize, k: usize) -> H
     let (info, data) = hfq
         .tensor_data(name)
         .unwrap_or_else(|| panic!("dflash tensor missing: {name}"));
+    info.expect_shape(&[m, k])?;
     let mut wt = match info.quant_type {
         1 => {
             // F16 on disk. Default: upload as F16 (no lift) and dispatch through
