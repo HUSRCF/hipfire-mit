@@ -2550,3 +2550,52 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
   so they are not claimed as complete answers.
 - Decision: accept row 71 as a cold-path architecture-invariant fix with
   explicit type-safety, MIT-boundary, quality, and performance evidence.
+
+---
+
+## M31: consistent HFQ family declarations — 2026-08-11
+
+### Run identity
+
+- Regression parent: `421de9a38daefa7b86964179c57e6c1618ea7a5f`.
+- Candidate commit: `2dcd964a87abe9fa85f24fb752c078e8ce8ae996`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Runtime architecture validator SHA-256: `eb6643b2e19354b132f31786c6f207ce6d706832ca0c58122e431a32db7dd64e`.
+- LLaMA/Qwen/Qwen-VL adapter SHA-256:
+  `a7fc1bd0a40aa3e29498725d3501059559c4eb33a9dcb2772006ac4c092c2101` /
+  `ef63621cd9c489adb9e12fc519fcac1dd45ed7399b27a9860189d0f37be8b553` /
+  `3ae49afeae958b7b5b3dc766dd3dabe4544789e43a97e2577c04c1f8385219c0`.
+- Adapter-family audit SHA-256: `153b30737a198351734a387e928ab326061a57eab2a852aeaabd6ffd669ce180`.
+- Candidate diff SHA-256: `315bbb28455d96c2558b65f9538a9254ae81b20978188c1f9bc8028849f8e676`.
+- Reports md5: quant `653ea51912cea6dab3b423e6d94c9444`, standard
+  `2245229156d0f8152e5c9e85cd0a4360`, DFlash
+  `e9e47193cb5b7407aa4ce63f6ef4846b`, agentic
+  `5a1d0e845095de3006d4e3b78564de78`.
+- Full gate: `/tmp/hipfire-integration-row72/summary.md`.
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1294.6 | 1290.4 | 1304.8 | 1294.6 |
+| 4B MQ4 decode tok/s | 140.9 | 141.4 | 140.9 | 140.5 | 140.9 |
+
+### Decision
+
+- A shared runtime validator now requires every available HFQ family
+  declaration (`architecture`, `config.model_type`, and
+  `config.text_config.model_type`) to resolve through the wire registry and
+  agree with the header ID.
+- The LLaMA, Qwen3.5, and Qwen3.5-VL adapters all invoke the validator before
+  interpreting family-specific configuration. Missing, unknown, mismatched,
+  and draft-only declarations fail closed.
+- Focused adapter tests, full CPU/GPU0 gates, and all eleven quant-parity cases
+  pass. Performance medians change +0.96%/-0.21% from M30 and remain
+  +5.48%/+0.00% versus the floor; no five-run expansion was required.
+- Generated outputs were manually reviewed as fluent, on-topic, and
+  non-looping. All four speculative cases are clean and Agentic reports zero
+  warnings. The bounded 9B reasoning sample ends inside its reasoning span,
+  so it is not claimed as a complete answer.
+- Decision: accept row 72 as a cold-path adapter-consistency fix with explicit
+  fail-closed, MIT-boundary, quality, and performance evidence.
