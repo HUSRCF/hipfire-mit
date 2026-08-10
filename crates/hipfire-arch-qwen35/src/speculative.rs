@@ -1836,8 +1836,11 @@ impl SpecStats {
 /// - Returns a `SpecStepResult` describing how many draft tokens were
 ///   accepted, the bonus token, and the full committed sequence.
 ///
-/// Naive sequential verification: runs the target on each drafted token one
-/// at a time. Phase 5 replaces the inner loop with a single batched prefill.
+/// Verification uses one batched target prefill for the whole candidate
+/// block. The initial target prediction is captured before the batch; the
+/// batch returns the remaining per-position predictions, including the bonus
+/// after full acceptance. Committed tokens are still replayed after rollback
+/// so both model slots retain identical state semantics.
 pub fn spec_step_greedy(
     gpu: &mut Gpu,
     target: &mut ModelSlot,
@@ -1846,6 +1849,8 @@ pub fn spec_step_greedy(
     k: usize,
     target_snap: &mut DeltaNetSnapshot,
     draft_snap: &mut DeltaNetSnapshot,
+    hidden_rb: &mut HiddenStateRingBuffer,
+    verify_scratch: &VerifyScratch,
 ) -> HipResult<SpecStepResult> {
     assert!(k >= 1, "speculation count k must be ≥ 1");
 
@@ -1874,20 +1879,26 @@ pub fn spec_step_greedy(
         }
     }
 
-    // Verification: run the target on each drafted token, collect logits.
-    // target_mid_logits[i] = target's prediction at position pos+i+1.
-    let mut target_mid_logits: Vec<Vec<f32>> = Vec::with_capacity(k);
-    for i in 0..k {
-        target.forward(gpu, drafted[i], pos + i)?;
-        target_mid_logits.push(gpu.download_f32(&target.scratch.logits)?);
-    }
+    // Verification: one target batch returns the predictions after every
+    // drafted token. Greedy mode downloads only k argmax indices rather than
+    // k full vocabulary rows.
+    let verify_out = verify_dflash_block(
+        gpu,
+        target,
+        &drafted,
+        pos,
+        hidden_rb,
+        None,
+        false,
+        verify_scratch,
+    )?;
     // Acceptance:
     //   drafted[0] verified by target_logits_at_pos  (logits at pos)
     //   drafted[i] (i >= 1) verified by target_mid_logits[i-1] (logits at pos+i)
     //   target_mid_logits[k-1] supplies the bonus after full acceptance.
     let mut target_predictions: Vec<u32> = Vec::with_capacity(k + 1);
     target_predictions.push(argmax_u32(&target_logits_at_pos));
-    target_predictions.extend(target_mid_logits.iter().map(|logits| argmax_u32(logits)));
+    target_predictions.extend_from_slice(&verify_out.argmax_per_pos);
     let plan = plan_greedy_acceptance(&drafted, &target_predictions);
     let accepted = plan.accepted;
     let bonus_token = plan.bonus_token;

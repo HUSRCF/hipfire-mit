@@ -157,12 +157,35 @@ fn main() {
     // once and reused across REPL turns. Only materialized in spec mode.
     let mut target_snap: Option<hipfire_arch_qwen35::speculative::DeltaNetSnapshot> = None;
     let mut draft_snap: Option<hipfire_arch_qwen35::speculative::DeltaNetSnapshot> = None;
+    let mut spec_hidden_rb: Option<hipfire_arch_qwen35::speculative::HiddenStateRingBuffer> = None;
+    let mut spec_verify_scratch: Option<hipfire_arch_qwen35::speculative::VerifyScratch> = None;
     if spec_active {
-        use hipfire_arch_qwen35::speculative::DeltaNetSnapshot;
+        use hipfire_arch_qwen35::speculative::{
+            DeltaNetSnapshot, HiddenStateRingBuffer, VerifyScratch,
+        };
         target_snap = Some(DeltaNetSnapshot::new_for(&mut gpu, &target_slot.dn_state).unwrap());
         if let Some(ref d) = draft_slot {
             draft_snap = Some(DeltaNetSnapshot::new_for(&mut gpu, &d.dn_state).unwrap());
         }
+        // The generic two-model path does not consume extracted hidden states,
+        // so a zero-extract ring satisfies the shared batched-verify contract
+        // without allocating per-layer history buffers.
+        spec_hidden_rb = Some(HiddenStateRingBuffer::new(
+            &mut gpu,
+            target_slot.config.n_layers,
+            0,
+            target_slot.config.dim,
+            max_seq,
+            spec_k,
+        ).unwrap());
+        spec_verify_scratch = Some(VerifyScratch::with_prefill(
+            &mut gpu,
+            spec_k,
+            target_slot.config.dim,
+            target_slot.config.vocab_size,
+            target_slot.config.dim,
+            &target_slot.config,
+        ).unwrap());
         eprintln!(
             "Speculative decode: greedy, K={}, draft={}",
             spec_k,
@@ -343,10 +366,12 @@ fn main() {
 
         if spec_active {
             // Speculative decode loop. Each cycle drafts spec_k tokens, the
-            // target verifies them sequentially (Phase 2 naive path), and the
-            // accepted prefix + bonus is committed to both models.
+            // target verifies them in one batch, and the accepted prefix +
+            // bonus is committed to both models.
             let ts = target_snap.as_mut().unwrap();
             let ds = draft_snap.as_mut().unwrap();
+            let hidden_rb = spec_hidden_rb.as_mut().unwrap();
+            let verify_scratch = spec_verify_scratch.as_ref().unwrap();
             let draft_ref = draft_slot.as_mut().unwrap();
             'outer: loop {
                 let pos = seq_pos + generated;
@@ -354,6 +379,7 @@ fn main() {
 
                 let step = hipfire_arch_qwen35::speculative::spec_step_greedy(
                     &mut gpu, &mut target_slot, draft_ref, pos, spec_k, ts, ds,
+                    hidden_rb, verify_scratch,
                 ).unwrap();
                 spec_stats.record(&step);
 
