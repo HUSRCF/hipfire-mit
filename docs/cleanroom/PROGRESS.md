@@ -16,7 +16,7 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M0: governance and reproducibility | 1-2 | complete | MIT/source gate, clean-room PR declaration, build and performance baselines |
 | M1: speculative decode foundation | 3-8 | complete | shared greedy acceptance contract, semantic statistics, deterministic tests, and GPU0 correctness/throughput acceptance |
 | M2: release and device execution | 10-18 | in progress | reproducible delivery and the device-execution foundation are complete; remaining quantization, maintenance, and integration directions are still open |
-| M3: quantization and context paths | 19-42 | in progress | strict HFQ boundaries and quant-payload layouts, ten-cell GPU/CPU quant parity gating including MQ8/MQ4, shared packed-KV allocation, and checked long-context position continuity are complete; full model-level format fidelity remains open |
+| M3: quantization and context paths | 19-43 | in progress | strict HFQ boundaries and quant-payload layouts, ten-cell GPU/CPU quant parity gating including MQ8/MQ4, a reproducible MQ8 scalar-dot negative experiment, shared packed-KV allocation, and checked long-context position continuity are complete; full model-level format fidelity remains open |
 
 ## M0 evidence
 
@@ -415,7 +415,35 @@ benchmark establishes default-path non-regression; no speedup is attributed
 to the MQ8-only execution repair. Detailed evidence is in
 `docs/cleanroom/PERFORMANCE_RECORD.md`.
 
-The conservative direction-table position is now complete through row 42 of
-2706; row 43 is next. Direction rows are audit inputs and are aggregated into
-independently specified implementation batches, so the remaining 2664 rows
-are not a promise of 2664 one-to-one Git commits.
+### MQ8 scalar-dot negative experiment
+
+Commit `fcbc0489ac923e6bbc99f56ef4515a01a825548a` adds a reproducible
+GPU microbenchmark for direction row 43 without changing the production
+kernel. It compiles the current gfx11 MQ8 GEMV twice: the control keeps the
+signed hardware `sudot4`, while the candidate expands every packed dot into
+four explicit scalar integer multiplies. Both variants use identical
+synthetic MQ8 payloads and activations and must agree numerically before any
+timing is accepted.
+
+Across four projection shapes and three fresh GPU0 processes after explicit
+five-second DPM warm-up, every output is bit-exact. The scalar/control latency
+ratio has a process median of 1.639; per-shape medians range from 1.242 to
+1.791. HSACO inspection confirms ten `v_dot4_i32_iu8` instructions and 33
+VGPRs for the control versus forty `v_mul_lo_u32` instructions and 51 VGPRs
+for the scalar candidate, with no scratch or spills in either variant. The
+experiment therefore rejects the scalar fallback and retains the existing
+gfx11 signed hardware-dot implementation.
+
+The ten-cell quantization battery, full workspace all-target tests, workspace
+example check, clean-room gate, four available standard coherence cells, all
+four DFlash/DDTree cells, and the fast agentic cell pass. Three fresh default
+MQ4 speed-gate observations have medians 1371.5 prefill tok/s and 139.7 decode
+tok/s, respectively +11.75% and -0.85% versus the committed W7900 floor. This
+is non-regression evidence only: the committed file is an opt-in benchmark
+and does not modify inference execution. Full identities, hashes, ISA
+evidence, and observations are in `docs/cleanroom/PERFORMANCE_RECORD.md`.
+
+The conservative direction-table position is now complete through row 43 of
+2706; row 44 is next. Direction rows are audit inputs and are aggregated into
+independently specified implementation batches, so the remaining 2663 rows
+are not a promise of 2663 one-to-one Git commits.

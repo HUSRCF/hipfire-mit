@@ -900,3 +900,87 @@ decode tok/s.
 - Decision: accept MQ8 execution on gfx11 and independent MQ8/MQ4 parity as
   the ninth M3 deliverable. Model-level format quality and fused/batched
   execution variants remain open.
+
+---
+
+## M3: MQ8 scalar-dot negative experiment — 2026-08-10
+
+### Run identity
+
+- Regression parent: `a8678c67ffd12f9134217ad2c972fdd86dac056c`.
+- Candidate commit: `fcbc0489ac923e6bbc99f56ef4515a01a825548a`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Candidate experiment SHA-256:
+  `b88ea3ff9b684f0f1780d5286fabfa441071bf86acbe79a00398400d68a4d2a1`.
+- Hardware-dot HSACO SHA-256:
+  `cc069d0033edc20eb63ff5bc058d4a4e71a5a91e49bcd885a7d97ce4dbf9da21`.
+- Scalar HSACO SHA-256:
+  `3c593699917d30c33312e89d0d4d0dd92f50221077cbcab6210be3ae72c98e89`.
+- Candidate benchmark md5: `c4a3eb86f27b00a88a32a7e32361f64c`.
+- Candidate daemon md5: `dbc7a5fdf00c9038992933f29696150b`.
+- Candidate DFlash md5: `fe1ee567a4b1ab04363090f8bb15696d`.
+- Environment: GPU0-only visibility and the same ROCm 7.14 library,
+  model-directory, W7900 baseline, and `scripts/gpu-lock.sh` serialization
+  used by the preceding M3 runs.
+- Experiment command: three fresh invocations of
+  `target/release/examples/bench_mq8_dot_variants`, each with the default
+  five-second DPM warm-up. Reports:
+  `/tmp/mq8-dot-negative-final-run1.txt`,
+  `/tmp/mq8-dot-negative-final-run2.txt`, and
+  `/tmp/mq8-dot-negative-final-run3.txt`.
+- Correctness commands: `cargo test --workspace --locked --all-targets`,
+  `cargo check --workspace --locked --examples`,
+  `./scripts/cleanroom-gate.sh`, `./scripts/quant-parity-gate.sh`,
+  `./scripts/coherence-gate.sh`, `./scripts/coherence-gate-dflash.sh`, and
+  `./scripts/agentic-gate.sh --fast`.
+- Performance command: three fresh invocations of
+  `./scripts/speed-gate.sh --fast`; each observation is best-of-two.
+
+### Direct MQ8 experiment
+
+| Shape | Dot4 median us | Scalar median us | Scalar/dot4 median ratio | Numerical result |
+|---|---:|---:|---:|---|
+| KV projection, M=512 K=4096 | 5.729 | 7.101 | 1.242 | bit-exact |
+| Square projection, M=4096 K=4096 | 12.944 | 20.493 | 1.573 | bit-exact |
+| Gate/up projection, M=11008 K=4096 | 25.427 | 45.519 | 1.791 | bit-exact |
+| Down projection, M=4096 K=11008 | 29.182 | 49.457 | 1.704 | bit-exact |
+
+The aggregate scalar/control ratio is 1.635, 1.639, and 1.639 in the three
+fresh processes, for a median of 1.639. Reported effective traffic rates are
+only a controlled repeated-read comparison and must not be interpreted as
+physical HBM bandwidth.
+
+The unbundled gfx1100 metadata reports 33 VGPRs and 33 SGPRs for the dot4
+control and 51 VGPRs and 32 SGPRs for the scalar candidate. Both use wave32,
+zero private segment bytes, zero LDS, and zero spills. Disassembly contains
+ten `v_dot4_i32_iu8` instructions in the control and forty `v_mul_lo_u32`
+instructions in the scalar variant. This rules out a spill-induced result and
+shows the scalar path's instruction expansion and added register pressure.
+
+### Default-path regression measurements
+
+| Metric | Committed floor | Candidate observation 1 | Candidate observation 2 | Candidate observation 3 | Candidate median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1371.5 | 1310.1 | 1375.9 | 1371.5 |
+| 4B MQ4 decode tok/s | 140.9 | 139.9 | 139.7 | 139.7 | 139.7 |
+
+### Decision
+
+- Reject the scalar gfx11 fallback. Its aggregate median latency is 63.9%
+  higher than the signed hardware-dot control, with bit-exact outputs.
+- Candidate default-path deltas are +11.75% prefill and -0.85% decode. All
+  observations pass the committed 5% regression tolerance. The production
+  inference hashes are unchanged and this commit adds only an opt-in
+  benchmark, so no inference speedup is attributed to it.
+- Unified GPU0 quant parity passes all ten cells. Report:
+  `/tmp/quant-parity-mq8-negative.md`.
+- Four available standard coherence cells pass after manual review. Report:
+  `/tmp/coherence-mq8-negative.md`.
+- All four DFlash/DDTree cells report `ok=true` and `soft_warn=false`; prose
+  and code outputs were manually reviewed. Report:
+  `/tmp/coherence-dflash-mq8-negative.md`.
+- The Qwen3.6 27B fast agentic cell emits valid `name='read'` JSON with zero
+  warnings. Report: `/tmp/agentic-gate-mq8-negative.md`.
+- Decision row 43 is closed as a measured negative experiment: retain the
+  generalized signed hardware dot path and do not merge the scalar candidate.
