@@ -1497,3 +1497,40 @@ The conservative direction-table position is now complete through row 72 of
 2706; row 73 is next. The remaining direction count is 2634. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M32 evidence
+
+### Fail-closed optional VL admission
+
+Direction row 73 closes another model-adaptation boundary error. The daemon
+previously combined a Qwen3.5-VL tensor-name probe with
+`config_from_hfq(...).ok()`. If vision weights existed but the vision config
+was malformed, the error was discarded and the model could proceed as a
+text-only target. The pipeline-parallel refusal probe used the same
+fail-open pattern.
+
+Commit `5363cb3` moves optional vision-component admission into the
+Qwen3.5-VL adapter. A text-only export may retain dormant vision metadata
+without activating the adapter, but the presence of actual vision weights
+now makes successful vision-config parsing mandatory. Both single-GPU and
+pipeline-parallel load paths consume the same fallible adapter method, and a
+static audit rejects daemon-side vision tensor knowledge or a return to
+discarded configuration errors. A pure unit test covers absent, present-valid,
+and present-invalid component states.
+
+No VL HFQ is installed on this host, so this batch does not claim real-image
+inference. Its VL-specific evidence is the deterministic admission unit test
+and two-path static audit. The complete available CPU and GPU0 batteries pass,
+including eleven quant-parity cases, standard coherence, four clean
+DFlash/DDTree cases, and Agentic with zero hard failures or soft warnings.
+Manual review found fluent, on-topic, non-looping output and valid tool-call
+JSON. The bounded 9B reasoning case remains an explicit completeness limit.
+
+Three fresh speed processes measure 1,299.1, 1,269.7, and 1,280.8 prefill
+tok/s and 141.2, 140.9, and 139.9 decode tok/s. Medians are 1,280.8 and 140.9,
+changing -1.07% and +0.00% from M31; no five-run expansion was required.
+
+The conservative direction-table position is now complete through row 73 of
+2706; row 74 is next. The remaining direction count is 2633. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.

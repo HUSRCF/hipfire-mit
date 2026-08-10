@@ -2599,3 +2599,51 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
   so it is not claimed as a complete answer.
 - Decision: accept row 72 as a cold-path adapter-consistency fix with explicit
   fail-closed, MIT-boundary, quality, and performance evidence.
+
+---
+
+## M32: fail-closed optional VL admission — 2026-08-11
+
+### Run identity
+
+- Regression parent: `06c56d5afa118a349058e5048ba1308467971be1`.
+- Candidate commit: `5363cb31d98395cb9f704029580f5276bf9e2427`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Qwen3.5-VL adapter SHA-256: `577df8cf4a932cb693edbb2647d07e1dbecf3a5f67ae456a5f232399bcd1de38`.
+- Daemon SHA-256: `99235b7c6005ae80233389a8ecf885ec1c1f6c073bd89f02b6aa7bea035c66ab`.
+- Architecture audit SHA-256: `c05c709f837e9dcd4fbeb2a7bf29e97e71b752dc2f68ee39740e1f89d9f8deac`.
+- Candidate diff SHA-256: `c675cb6cd6ac24cffecf95f0aef713e98630a5af47e3341b7f14f9bf9ec1e74c`.
+- Reports md5: quant `c65f95da747e97989186b8b783567f88`, standard
+  `f4f93b1c84ea7f7254d6e0553ca2a0ac`, DFlash
+  `2e55bf538e619081eb925bf6b1cb2f9a`, agentic
+  `c6fdd04813ce4365a4cdc20a0c771895`.
+- Full gate: `/tmp/hipfire-integration-row73/summary.md`.
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1299.1 | 1269.7 | 1280.8 | 1280.8 |
+| 4B MQ4 decode tok/s | 140.9 | 141.2 | 140.9 | 139.9 | 140.9 |
+
+### Decision
+
+- The Qwen3.5-VL adapter now owns optional vision-component admission.
+  Dormant vision metadata without vision weights remains valid for text-only
+  exports, while present vision weights require a parseable vision config.
+- Single-GPU and pipeline-parallel load paths both propagate adapter errors;
+  neither can discard an invalid VL config and silently continue as text-only.
+- Focused VL and daemon tests plus full CPU/GPU0 gates pass. Performance
+  medians change -1.07%/+0.00% from M31 and remain +4.36%/+0.00% versus the
+  floor; no five-run expansion was required.
+- Generated outputs were manually reviewed as fluent, on-topic, and
+  non-looping. All four speculative cases are clean and Agentic reports zero
+  warnings. The bounded 9B reasoning sample ends inside its reasoning span,
+  so it is not claimed as a complete answer.
+- No VL HFQ is installed on this host, so this milestone does not claim a
+  real-image inference result. Its VL evidence is the pure admission test and
+  static two-load-path audit; the full available GPU battery covers text-path
+  regression.
+- Decision: accept row 73 as a cold-load adapter-ownership correction with
+  explicit fail-closed, MIT-boundary, quality, and performance evidence.
