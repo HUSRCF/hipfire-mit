@@ -2188,3 +2188,45 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
   hard failures and zero soft warnings.
 - Decision: accept row 63 as a cold-path model-adapter ownership correction
   with full MIT-boundary, quality, and performance non-regression evidence.
+
+---
+
+## M23: HFQ BF16 vision-consumer compatibility — 2026-08-11
+
+### Run identity
+
+- Regression parent: `1c3a44e895543a0b8e7d05aa4c3bf4c65e4af277`.
+- Candidate commit: `26d9ca3213e692233f3b60be951eca5f19755246`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Vision loader SHA-256: `ee598d9fb01f735cd026afd9317d976c036358421097d44da774e4a11fcde353`.
+- BF16 contract audit SHA-256: `0773e1aed367442cab2b9ea6764c54104cc75bd7dd34adb1fbb5e5b1ce17b68f`.
+- Integration gate SHA-256: `81a370078147e44f4e3cf00b0a41ce06dae0d41afcc10e68e82872c5d5bd3291`.
+- Candidate diff SHA-256: `5e7bf21b8b11bde92e0c919f30b0334f66efc634de1db74cc7eae690753c9d8b`.
+- Reports md5: quant `92688590f854aa73f0a9f9b6cc1262ae`, standard
+  `6db5d4307e0ff6f5a3317117e08096ff`, DFlash
+  `46ee5b08557a6c30cc73127a7824ebdd`, agentic
+  `769b8c4c3a05f07c78a3d461cbadcebe`.
+- Full gate: `/tmp/hipfire-integration-row64/summary.md`.
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1286.1 | 1285.6 | 1289.6 | 1286.1 |
+| 4B MQ4 decode tok/s | 140.9 | 140.9 | 140.3 | 140.2 | 140.3 |
+
+### Decision
+
+- The qt16 producer, HFQ layout registry, and Qwen3.5-VL F32/F16 consumers
+  now agree; deterministic tests pin exact BF16 widening and F16 conversion.
+- No qt16 VL model is installed, so real-model visual inference remains
+  unclaimed. All available workspace and GPU0 regression gates pass.
+- Performance medians change -3.09%/+0.36% from M22 and remain
+  +4.79%/-0.43% versus the committed floor.
+- Generated outputs were manually reviewed; standard and DFlash/DDTree output
+  remains bounded and on-topic, all speculative detectors are clean, and
+  agentic reports zero hard failures and zero soft warnings.
+- Decision: accept row 64 as a cold-path HFQ format-compatibility correction
+  with explicit evidence limits, MIT-boundary checks, and performance
+  non-regression evidence.

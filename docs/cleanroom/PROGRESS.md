@@ -1193,3 +1193,36 @@ The conservative direction-table position is now complete through row 63 of
 2706; row 64 is next. The remaining direction count is 2643. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M23 evidence
+
+### HFQ BF16 vision-consumer compatibility
+
+Direction row 64 repairs a producer/consumer gap in the HFQ quantization
+contract. The quantizer emits losslessly stored BF16 vision tensors as
+`quant_type=16`, and the HFQ wire validator accepts that ID as dense two-byte
+data, but the Qwen3.5-VL loader previously handled only F16, F32, and HFQ4.
+Commit `26d9ca3` now widens qt16 parameters exactly to F32 and converts qt16
+matrix weights once on the cold load path to the F16 representation consumed
+by the existing vision kernels. Two bit-pattern tests cover exact BF16-to-F32
+widening and the BF16-to-F16 kernel-input conversion. A static audit pins the
+quantizer, wire registry, and both vision consumers to the same format ID.
+
+No qt16 VL model is installed on this host, so this milestone does not claim
+a real-model vision inference result. Its format evidence is the producer and
+wire audit plus deterministic conversion tests; its regression evidence covers
+the complete available text and GPU battery. The full workspace, MIT checks,
+eleven-cell quant parity, standard coherence, four DFlash/DDTree cells, and
+Qwen3.6 27B agentic cell pass on GPU0. Manual review found bounded on-topic
+standard output, clean speculative detectors, valid tool-call JSON, and zero
+agentic warnings.
+
+Three fresh performance processes measure 1,286.1, 1,285.6, and 1,289.6
+prefill tok/s and 140.9, 140.3, and 140.2 decode tok/s. Medians are 1,286.1
+and 140.3 tok/s, changing by -3.09% and +0.36% from M22, so no five-run
+expansion was required.
+
+The conservative direction-table position is now complete through row 64 of
+2706; row 65 is next. The remaining direction count is 2642. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.
