@@ -2504,3 +2504,49 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
   claimed as a complete answer.
 - Decision: accept row 70 as a format-boundary architecture refactor with
   explicit producer/consumer, MIT-boundary, quality, and performance evidence.
+
+---
+
+## M30: sealed architecture descriptor invariants — 2026-08-11
+
+### Run identity
+
+- Regression parent: `3adfe636e8bb61ae8df51e89ec6d230a0d78d850`.
+- Candidate commit: `08dc82c61a91158ad23a7f62837c7c838ba8bf99`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Architecture registry SHA-256: `607bb674241c6662f1f4aeab2e6cfb5fc2bba6e0acc2354fd21be4d661a89c0c`.
+- Quantizer/runtime SHA-256: `d4850c4338d388ea5b45e9019adb0423f98e9edaeabfccf82a75e4c06e258656` /
+  `f50b59166904b641947f8dac2f4be45a4f22327765794d7080225650da514a5f`.
+- Registry documentation SHA-256: `fafcd3012b2a2d6c10d637b5510d6e34ecb39338f92b97d6ac6db301a9fd3eb4`.
+- Candidate diff SHA-256: `3f3620a96e81437f6ed28f88352f38d5594ad189f3a9e3d246bae683105f31b8`.
+- Reports md5: quant `47c072796063c58d8aa1edc7371807bf`, standard
+  `2060266f8b5d17a07614a802411e8b8a`, DFlash
+  `0cde5d6453a5146a2df3b07f4713e94d`, agentic
+  `b30ca31720204f5fb1326dced2c29737`.
+- Full gate: `/tmp/hipfire-integration-row71/summary.md`.
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1282.3 | 1279.3 | 1292.3 | 1282.3 |
+| 4B MQ4 decode tok/s | 140.9 | 141.5 | 141.2 | 140.3 | 141.2 |
+
+### Decision
+
+- `ModelArchitecture` no longer exposes forgeable ID, family, or dense/MoE
+  fields. Target descriptors are constructed from registered target IDs and
+  all other properties are derived from that single source of truth.
+- Draft-only ID 20 is explicitly rejected by target-descriptor construction;
+  the quantizer and runtime use read-only accessors, and the static audit pins
+  the sealed-property contract.
+- Four registry tests, all 86 quantizer tests, and full CPU/GPU0 gates pass.
+  Performance medians change -0.65%/+0.50% from M29 and remain
+  +4.48%/+0.21% versus the floor; no five-run expansion was required.
+- Generated outputs were manually reviewed as on-topic and non-looping. All
+  four speculative cases are clean and Agentic reports zero warnings. The
+  bounded 4B code and 9B reasoning samples end inside their reasoning spans,
+  so they are not claimed as complete answers.
+- Decision: accept row 71 as a cold-path architecture-invariant fix with
+  explicit type-safety, MIT-boundary, quality, and performance evidence.

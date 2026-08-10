@@ -1429,3 +1429,35 @@ The conservative direction-table position is now complete through row 70 of
 2706; row 71 is next. The remaining direction count is 2636. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M30 evidence
+
+### Sealed architecture descriptor invariants
+
+Direction row 71 is the first problem-fix pass over the shared architecture
+boundary introduced for row 70. `ModelArchitecture` still exposed its ID,
+family, and dense/MoE fields publicly, allowing a caller to construct values
+whose routing properties contradicted one another. A shared registry with
+forgeable descriptors would merely move the drift into a different type.
+
+Commit `08dc82c` reduces the descriptor to one private registered target ID.
+Construction from a wire ID rejects draft-only formats, while ID, family, and
+dense/MoE values are exposed through derived read-only accessors. Quantization
+and runtime consumers use those accessors, and the architecture audit rejects
+future public-property regressions. Exhaustive tests cover all four target IDs
+and confirm that DFlash draft ID 20 cannot be represented as a target model.
+
+The complete CPU and GPU0 batteries pass, including eleven quant-parity cases,
+standard coherence, four clean DFlash/DDTree cases, and Agentic with zero hard
+failures or soft warnings. Manual review found generated text fluent, on-topic,
+and non-looping. The bounded 4B code and 9B reasoning cases stop inside their
+reasoning spans and remain recorded completeness limitations.
+
+Three fresh speed processes measure 1,282.3, 1,279.3, and 1,292.3 prefill
+tok/s and 141.5, 141.2, and 140.3 decode tok/s. Medians are 1,282.3 and 141.2,
+changing -0.65% and +0.50% from M29; no five-run expansion was required.
+
+The conservative direction-table position is now complete through row 71 of
+2706; row 72 is next. The remaining direction count is 2635. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.
