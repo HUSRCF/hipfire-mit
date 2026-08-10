@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Phase-level breakdown of attention_q8_0_kv at long context.
 //!
 //! The normal profile_qwen35_mq4 only reports per-kernel totals — it shows
@@ -11,6 +12,7 @@
 //!   phase 3: V-weighted sum
 //!
 //! Usage: profile_attention_phases <model.mq4> [--prefill N] [--repeats N]
+//!        [--record PATH]
 //!
 //! The workflow: prefill to target context via forward_prefill_batch, then
 //! do a handful of single-token forward steps to settle the KV cache, then
@@ -19,6 +21,24 @@
 
 #[cfg(not(feature = "deltanet"))]
 fn main() { eprintln!("build with --features deltanet"); }
+
+#[cfg(feature = "deltanet")]
+#[derive(serde::Serialize)]
+struct LongContextQ8Record<'a> {
+    schema: &'static str,
+    model: &'a str,
+    gpu_arch: &'a str,
+    prefill_tokens: usize,
+    prefill_ms: f64,
+    sequence_length: usize,
+    phase_repeats: usize,
+    reference_attention_us: f64,
+    flash_attention_us: f64,
+    flash_speedup: f64,
+    max_abs_delta: f32,
+    max_rel_delta: f32,
+    output_abs_max: f32,
+}
 
 #[cfg(feature = "deltanet")]
 fn main() {
@@ -38,11 +58,13 @@ fn main() {
 
     let mut prefill_len: usize = 4096;
     let mut repeats: usize = 20;
+    let mut record_path: Option<String> = None;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
             "--prefill" => { prefill_len = args[i + 1].parse().unwrap(); i += 2; }
             "--repeats" => { repeats = args[i + 1].parse().unwrap(); i += 2; }
+            "--record" => { record_path = Some(args[i + 1].clone()); i += 2; }
             other => { eprintln!("unknown arg: {other}"); std::process::exit(1); }
         }
     }
@@ -91,7 +113,8 @@ fn main() {
         &mut kv_cache, &mut dn_state, &scratch,
         None, None, None, None,
     ).expect("prefill failed");
-    eprintln!("  prefill: {:.1}ms", t_prefill.elapsed().as_secs_f64() * 1000.0);
+    let prefill_ms = t_prefill.elapsed().as_secs_f64() * 1000.0;
+    eprintln!("  prefill: {prefill_ms:.1}ms");
 
     let logits = gpu.download_f32(&scratch.logits).unwrap();
     let mut next_token = llama::argmax(&logits);
@@ -326,5 +349,26 @@ fn main() {
         println!("  WARNING: relative error > 1e-3");
         println!("  First 8 baseline: {:?}", &out_baseline[..8]);
         println!("  First 8 flash:    {:?}", &out_flash[..8]);
+    }
+
+    if let Some(path) = record_path {
+        let record = LongContextQ8Record {
+            schema: "hipfire.long_context_q8.v1",
+            model: model_path,
+            gpu_arch: &gpu.arch,
+            prefill_tokens: prefill_len,
+            prefill_ms,
+            sequence_length: seq_len,
+            phase_repeats: repeats,
+            reference_attention_us: v1_us,
+            flash_attention_us: flash_us,
+            flash_speedup: v1_us / flash_us,
+            max_abs_delta: max_abs,
+            max_rel_delta: max_rel,
+            output_abs_max: max_val,
+        };
+        let json = serde_json::to_string_pretty(&record).expect("serialize long-context Q8 record");
+        std::fs::write(&path, format!("{json}\n")).expect("write long-context Q8 record");
+        eprintln!("record: {path}");
     }
 }
