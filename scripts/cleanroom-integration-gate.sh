@@ -31,6 +31,7 @@ CPU_STEPS=(
     architecture-adapter-audit
     adapter-config-family-audit
     hfq-consumer-shape-audit
+    vision-bf16-contract-audit
     tokenizer-special-scan-audit
     speculative-embedding-audit
     greedy-batched-verify-audit
@@ -60,6 +61,7 @@ REQUIRED_SCRIPTS=(
     scripts/verify-architecture-adapters.sh
     scripts/verify-adapter-config-family.sh
     scripts/verify-hfq-consumer-shapes.sh
+    scripts/verify-vision-bf16-contract.sh
     scripts/verify-tokenizer-special-scan.sh
     scripts/verify-speculative-embedding.sh
     scripts/verify-greedy-batched-verify.sh
@@ -214,6 +216,7 @@ execute_step() {
         architecture-adapter-audit) ./scripts/verify-architecture-adapters.sh ;;
         adapter-config-family-audit) ./scripts/verify-adapter-config-family.sh ;;
         hfq-consumer-shape-audit) ./scripts/verify-hfq-consumer-shapes.sh ;;
+        vision-bf16-contract-audit) ./scripts/verify-vision-bf16-contract.sh ;;
         tokenizer-special-scan-audit) ./scripts/verify-tokenizer-special-scan.sh ;;
         speculative-embedding-audit) ./scripts/verify-speculative-embedding.sh ;;
         greedy-batched-verify-audit) ./scripts/verify-greedy-batched-verify.sh ;;

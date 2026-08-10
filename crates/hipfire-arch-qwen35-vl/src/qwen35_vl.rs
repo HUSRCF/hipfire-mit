@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Qwen3.5-VL vision encoder: SigLIP-2 ViT + spatial merger.
 //! GPU path: gemm_f16 (9 VGPRs), layernorm (13), gelu (8), vit_attention, transpose.
 
@@ -88,14 +89,32 @@ impl VisionWeights {
 
 // ─── Weight loading ──────────────────────────────────────────────────────────
 
+/// Decode little-endian BF16 payload bytes without changing their stored
+/// precision. HFQ quant_type 16 is emitted by `hipfire-quantize` for lossless
+/// vision storage; compute consumers choose their required GPU representation
+/// after this exact widening step.
+fn bf16_bytes_to_f32(data: &[u8]) -> Vec<f32> {
+    data.chunks_exact(2)
+        .map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16))
+        .collect()
+}
+
+fn bf16_bytes_to_f16(data: &[u8]) -> Vec<u8> {
+    bf16_bytes_to_f32(data)
+        .into_iter()
+        .flat_map(|value| f32_to_f16(value).to_le_bytes())
+        .collect()
+}
+
 fn load_f32_gpu(hfq: &HfqFile, gpu: &mut Gpu, name: &str, n: usize) -> HipResult<GpuTensor> {
     let (info, data) = hfq.tensor_data(name)
         .unwrap_or_else(|| panic!("vision tensor not found: {name}"));
     let vals: Vec<f32> = match info.quant_type {
         1 => data.chunks_exact(2).map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]]))).collect(),
         2 => data.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
+        16 => bf16_bytes_to_f32(data),
         6 | 7 => dequant_hfq4(data, n, info.group_size as usize),
-        _ => panic!("expected F16/F32/HFQ4 for {name}, got qt={}", info.quant_type),
+        _ => panic!("expected F16/F32/BF16/HFQ4 for {name}, got qt={}", info.quant_type),
     };
     gpu.upload_f32(&vals[..n], &[n])
 }
@@ -109,6 +128,12 @@ fn load_f16_gpu(hfq: &HfqFile, gpu: &mut Gpu, name: &str) -> HipResult<GpuTensor
             // F16 — upload directly. Shape records element count, not byte count.
             gpu.upload_raw(data, &[n])
         }
+        16 => {
+            // The vision kernels consume F16. Preserve BF16 exactly on disk,
+            // then convert once on the cold load path for their input format.
+            let f16_bytes = bf16_bytes_to_f16(data);
+            gpu.upload_raw(&f16_bytes, &[n])
+        }
         6 | 7 => {
             // HFQ4 — dequantize to F32, then convert to F16 for gemm_f16.
             // Shape records element count, not byte count.
@@ -118,7 +143,7 @@ fn load_f16_gpu(hfq: &HfqFile, gpu: &mut Gpu, name: &str) -> HipResult<GpuTensor
                 .collect();
             gpu.upload_raw(&f16_bytes, &[n])
         }
-        other => panic!("{name}: unsupported vision quant_type={other} (expected F16=1, HFQ4=6/7)"),
+        other => panic!("{name}: unsupported vision quant_type={other} (expected F16=1, HFQ4=6/7, BF16=16)"),
     }
 }
 
@@ -159,6 +184,7 @@ pub fn load_vision_weights(hfq: &HfqFile, config: &VisionConfig, gpu: &mut Gpu) 
             1 => "F16 (direct)",
             6 => "HFQ4-G256 (dequanting to F16 on load)",
             7 => "HFQ4-G128 (dequanting to F16 on load)",
+            16 => "BF16 (converting to F16 on load)",
             other => &format!("qt={other}"),
         };
         eprintln!("  vision weight format: {fmt}");
@@ -339,4 +365,37 @@ pub fn vision_forward(
     eprintln!("  vision done: {} tokens × {} dims ({:.2}s)",
         n_merged, config.out_hidden_size, t0.elapsed().as_secs_f32());
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bf16_bytes_to_f16, bf16_bytes_to_f32};
+
+    #[test]
+    fn bf16_payload_widens_exactly_to_f32() {
+        let data = [
+            0x80, 0x3f, // 1.0
+            0x20, 0xc0, // -2.5
+            0x81, 0x3f, // 1.0078125
+            0x80, 0x7f, // +infinity
+        ];
+        let values = bf16_bytes_to_f32(&data);
+
+        assert_eq!(values[0].to_bits(), 0x3f80_0000);
+        assert_eq!(values[1].to_bits(), 0xc020_0000);
+        assert_eq!(values[2].to_bits(), 0x3f81_0000);
+        assert_eq!(values[3].to_bits(), 0x7f80_0000);
+    }
+
+    #[test]
+    fn bf16_payload_converts_to_vision_kernel_f16() {
+        let data = [0x80, 0x3f, 0x20, 0xc0, 0x81, 0x3f];
+        let converted = bf16_bytes_to_f16(&data);
+        let bits: Vec<u16> = converted
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+
+        assert_eq!(bits, vec![0x3c00, 0xc100, 0x3c08]);
+    }
 }
