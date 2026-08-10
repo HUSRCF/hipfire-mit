@@ -29,6 +29,12 @@ pub struct Tokenizer {
     /// Special tokens: strings like "<|im_start|>" → their token ID
     /// Sorted longest-first for greedy matching
     special_tokens: Vec<(String, u32)>,
+    /// Special-token indices grouped by first UTF-8 byte. Each bucket
+    /// preserves `special_tokens`' longest-first order. This turns the common
+    /// no-special-token encode path from one full-text search per registered
+    /// special into one pass over the input with comparisons only at viable
+    /// starting bytes.
+    special_token_initial_index: [Vec<usize>; 256],
     /// Special tokens
     pub bos_id: u32,
     pub eos_id: u32,
@@ -50,6 +56,18 @@ fn build_merge_pair_rank(merges: &[(String, String)]) -> HashMap<(String, String
         .enumerate()
         .map(|(i, (l, r))| ((l.clone(), r.clone()), i))
         .collect()
+}
+
+fn build_special_token_initial_index(
+    special_tokens: &[(String, u32)],
+) -> [Vec<usize>; 256] {
+    let mut index: [Vec<usize>; 256] = std::array::from_fn(|_| Vec::new());
+    for (token_index, (token, _)) in special_tokens.iter().enumerate() {
+        if let Some(&initial) = token.as_bytes().first() {
+            index[initial as usize].push(token_index);
+        }
+    }
+    index
 }
 
 impl Tokenizer {
@@ -120,6 +138,7 @@ impl Tokenizer {
         special_tokens.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
 
         let merge_pair_rank = build_merge_pair_rank(&merges);
+        let special_token_initial_index = build_special_token_initial_index(&special_tokens);
 
         Some(Tokenizer {
             vocab,
@@ -127,6 +146,7 @@ impl Tokenizer {
             merges,
             merge_pair_rank,
             special_tokens,
+            special_token_initial_index,
             bos_id,
             eos_id,
             eot_id,
@@ -216,6 +236,7 @@ impl Tokenizer {
         let is_gpt2_bpe = token_to_id.contains_key("Ġthe") || token_to_id.contains_key("Ġ");
 
         let merge_pair_rank = build_merge_pair_rank(&merges);
+        let special_token_initial_index = build_special_token_initial_index(&special_tokens);
 
         Some(Tokenizer {
             vocab,
@@ -223,6 +244,7 @@ impl Tokenizer {
             merges,
             merge_pair_rank,
             special_tokens,
+            special_token_initial_index,
             bos_id,
             eos_id,
             eot_id,
@@ -318,6 +340,7 @@ impl Tokenizer {
         special_tokens.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
 
         let merge_pair_rank = build_merge_pair_rank(&merges);
+        let special_token_initial_index = build_special_token_initial_index(&special_tokens);
 
         Some(Tokenizer {
             vocab,
@@ -325,6 +348,7 @@ impl Tokenizer {
             merges,
             merge_pair_rank,
             special_tokens,
+            special_token_initial_index,
             bos_id,
             eos_id,
             eot_id,
@@ -430,40 +454,48 @@ impl Tokenizer {
             return self.encode_raw(text);
         }
 
-        // Split text at special token boundaries (greedy longest match)
+        // Split text at special-token boundaries. `next_special_match` scans
+        // the input once and consults only the longest-first bucket for the
+        // current byte, preserving earliest-position / longest-at-position
+        // semantics without searching the whole text once per special token.
         let mut result = Vec::new();
         let mut remaining = text;
         while !remaining.is_empty() {
-            // Try to match a special token at current position
-            let mut matched = false;
-            for (st, id) in &self.special_tokens {
-                if remaining.starts_with(st.as_str()) {
-                    result.push(*id);
-                    remaining = &remaining[st.len()..];
-                    matched = true;
+            match self.next_special_match(remaining) {
+                Some((position, token_len, token_id)) => {
+                    if position > 0 {
+                        result.extend(self.encode_raw(&remaining[..position]));
+                    }
+                    result.push(token_id);
+                    remaining = &remaining[position + token_len..];
+                }
+                None => {
+                    result.extend(self.encode_raw(remaining));
                     break;
                 }
             }
-            if matched {
-                continue;
-            }
-            // Find the next special token occurrence
-            let mut next_special = remaining.len();
-            for (st, _) in &self.special_tokens {
-                if let Some(pos) = remaining.find(st.as_str()) {
-                    if pos < next_special {
-                        next_special = pos;
-                    }
-                }
-            }
-            // Encode the segment before the next special token
-            let segment = &remaining[..next_special];
-            if !segment.is_empty() {
-                result.extend(self.encode_raw(segment));
-            }
-            remaining = &remaining[next_special..];
         }
         result
+    }
+
+    fn next_special_match(&self, text: &str) -> Option<(usize, usize, u32)> {
+        for (position, &initial) in text.as_bytes().iter().enumerate() {
+            let candidates = &self.special_token_initial_index[initial as usize];
+            if candidates.is_empty() {
+                continue;
+            }
+            // UTF-8 continuation bytes cannot begin a valid special token, so
+            // every populated-bucket position is safe to use as a string slice.
+            debug_assert!(text.is_char_boundary(position));
+            let suffix = &text[position..];
+            for &token_index in candidates {
+                let (token, token_id) = &self.special_tokens[token_index];
+                if suffix.starts_with(token) {
+                    return Some((position, token.len(), *token_id));
+                }
+            }
+        }
+        None
     }
 
     /// Encode without special token handling.
@@ -1251,6 +1283,7 @@ mod bpe_tests {
             merges,
             merge_pair_rank,
             special_tokens: Vec::new(),
+            special_token_initial_index: std::array::from_fn(|_| Vec::new()),
             bos_id: 0,
             eos_id: 0,
             eot_id: None,
@@ -1363,6 +1396,89 @@ mod bpe_tests {
         assert_eq!(out.len(), 256);
         assert!(out.iter().all(|&id| id == 2));
     }
+
+    fn encode_with_linear_special_scan(tokenizer: &Tokenizer, text: &str) -> Vec<u32> {
+        if tokenizer.special_tokens.is_empty() {
+            return tokenizer.encode_raw(text);
+        }
+        let mut result = Vec::new();
+        let mut remaining = text;
+        while !remaining.is_empty() {
+            let mut matched = false;
+            for (token, token_id) in &tokenizer.special_tokens {
+                if remaining.starts_with(token) {
+                    result.push(*token_id);
+                    remaining = &remaining[token.len()..];
+                    matched = true;
+                    break;
+                }
+            }
+            if matched {
+                continue;
+            }
+            let mut next_special = remaining.len();
+            for (token, _) in &tokenizer.special_tokens {
+                if let Some(position) = remaining.find(token) {
+                    next_special = next_special.min(position);
+                }
+            }
+            result.extend(tokenizer.encode_raw(&remaining[..next_special]));
+            remaining = &remaining[next_special..];
+        }
+        result
+    }
+
+    fn synth_with_specials(specials: &[&str]) -> Tokenizer {
+        let mut vocab: Vec<String> = (0u16..=255)
+            .map(|byte| byte_to_gpt2_char(byte as u8).to_string())
+            .collect();
+        let mut special_tokens = Vec::new();
+        for &special in specials {
+            let token_id = vocab.len() as u32;
+            vocab.push(special.to_string());
+            special_tokens.push((special.to_string(), token_id));
+        }
+        special_tokens.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        let token_to_id = vocab
+            .iter()
+            .enumerate()
+            .map(|(id, token)| (token.clone(), id as u32))
+            .collect();
+        let special_token_initial_index = build_special_token_initial_index(&special_tokens);
+        Tokenizer {
+            vocab,
+            token_to_id,
+            merges: Vec::new(),
+            merge_pair_rank: HashMap::new(),
+            special_tokens,
+            special_token_initial_index,
+            bos_id: 0,
+            eos_id: 0,
+            eot_id: None,
+            is_gpt2_bpe: true,
+        }
+    }
+
+    #[test]
+    fn indexed_special_scan_is_byte_identical_to_linear_reference() {
+        let tokenizer = synth_with_specials(&[
+            "<x>", "<xy>", "<|im_start|>", "<|im_end|>", "[SPECIAL]", "🦀",
+        ]);
+        for text in [
+            "ordinary text without markers",
+            "<xy>overlap<x>",
+            "a<x><|im_end|>b",
+            "[SPECIAL]prefix and suffix🦀",
+            "not a completed <|im_start marker",
+            "é🦀tail",
+        ] {
+            assert_eq!(
+                tokenizer.encode(text),
+                encode_with_linear_special_scan(&tokenizer, text),
+                "special-token scan diverged for {text:?}",
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1394,6 +1510,7 @@ mod sp_tests {
             merges,
             merge_pair_rank,
             special_tokens: Vec::new(),
+            special_token_initial_index: std::array::from_fn(|_| Vec::new()),
             bos_id: 0,
             eos_id: 0,
             eot_id: None,

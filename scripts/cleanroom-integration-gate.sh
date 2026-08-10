@@ -30,6 +30,7 @@ CPU_STEPS=(
     bind-thread-audit
     architecture-adapter-audit
     hfq-consumer-shape-audit
+    tokenizer-special-scan-audit
     generation-semantics-audit
     agentic-detector-self-check
     cleanroom-license
@@ -49,6 +50,7 @@ REQUIRED_SCRIPTS=(
     scripts/speed-gate.sh
     scripts/verify-architecture-adapters.sh
     scripts/verify-hfq-consumer-shapes.sh
+    scripts/verify-tokenizer-special-scan.sh
     scripts/verify-generation-semantics.sh
     scripts/verify-bind-thread.sh
 )
@@ -193,6 +195,7 @@ execute_step() {
         bind-thread-audit) ./scripts/verify-bind-thread.sh ;;
         architecture-adapter-audit) ./scripts/verify-architecture-adapters.sh ;;
         hfq-consumer-shape-audit) ./scripts/verify-hfq-consumer-shapes.sh ;;
+        tokenizer-special-scan-audit) ./scripts/verify-tokenizer-special-scan.sh ;;
         generation-semantics-audit) ./scripts/verify-generation-semantics.sh ;;
         agentic-detector-self-check) ./scripts/agentic-gate.sh --self-check ;;
         cleanroom-license) ./scripts/cleanroom-gate.sh ;;
