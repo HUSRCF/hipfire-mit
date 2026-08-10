@@ -1417,3 +1417,85 @@ tok/s.
   pair is absent; this is not counted as passing coverage.
 - Decision: accept row 50 as a load-time contract binding validated HFQ payload
   layouts to model-consumer dimensions before any GPU interpretation.
+
+---
+
+## M10: tokenizer special-token scan — 2026-08-10
+
+### Run identity
+
+- Regression parent: `803adec227cb1caf764f421e6422a799246a7506`.
+- Candidate commit: `df8c5408cbfd773513e668d9c974f47980a6e8a8`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Tokenizer SHA-256:
+  `944893c4039474114e3fba3be2c021415d116199e47207547e87d0d014bb3bf3`.
+- Special-scan audit SHA-256:
+  `8db6c61e56d6aea89e281de24c3b72e7126084ba46d099fbfbbe4a264d4a3c87`.
+- Tokenizer microbenchmark source SHA-256:
+  `21d0328da6a150d5893da5aedeb92d4495075aab5c04f378772ef375020eadca`.
+- Candidate commit diff SHA-256:
+  `cb338c2544938798d86841339275a6661c27ca25bcc583f7163497cea0477181`.
+- Candidate GPU benchmark md5: `2f2e25d00800a1a482d67463990cdbb7`.
+- Candidate tokenizer benchmark md5: `d89be854ee8fe777b8d6064bf45a5150`.
+- Candidate daemon md5: `6267d1dcf1e8d89160c1dbb3b00e2914`.
+- Candidate DFlash md5: `eb1eb35810ac8393b0398ece0281eb1a`.
+- Environment: GPU0-only ROCr/HIP visibility, ROCm 7.14 library path,
+  local read-only model directory, W7900 baseline selection, explicit
+  speed-gate DPM warm-up, and per-child GPU-lock serialization.
+- Full command: `./scripts/cleanroom-integration-gate.sh --speed-runs 3
+  --out /tmp/hipfire-integration-row51` under the recorded environment.
+- Machine manifest: `/tmp/hipfire-integration-row51/summary.md`.
+
+### Tokenizer microbenchmark
+
+Each process loads `/home/husrcf/.hipfire/models/qwen3.5-4b.mq4`, runs seven
+timed samples of 3,000 encodes, and reports the within-process median. The
+table's median is then taken across three fresh processes; lower is better.
+
+| Input | Version | Process 1 ns | Process 2 ns | Process 3 ns | Median ns | Delta |
+|---|---|---:|---:|---:|---:|---:|
+| Plain prompt | parent | 23356.8 | 23277.4 | 23296.3 | 23296.3 | — |
+| Plain prompt | candidate | 22449.6 | 22496.5 | 22852.6 | 22496.5 | -3.43% |
+| ChatML-framed prompt | parent | 12955.7 | 12897.1 | 14445.2 | 12955.7 | — |
+| ChatML-framed prompt | candidate | 10595.8 | 11689.2 | 10880.2 | 10880.2 | -16.02% |
+
+### GPU measurements
+
+| Metric | Committed floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1406.5 | 1298.9 | 1276.0 | 1298.9 |
+| 4B MQ4 decode tok/s | 140.9 | 141.7 | 141.6 | 140.6 | 141.6 |
+
+### Decision
+
+- GPU median deltas are +5.84% prefill and +0.50% decode versus the committed
+  floor. Every observation passes the 5% regression tolerance. Relative to M9
+  medians the changes are +1.62% and +0.57%, so no two-run expansion was
+  required.
+- The indexed scanner is byte-identical to the prior linear reference over
+  ordinary, overlapping, adjacent, incomplete, and Unicode cases. All 187
+  runtime tests pass, and the static audit is included in the integration
+  manifest.
+- The CPU microbenchmark attributes a 3.43% latency reduction to ordinary
+  prompt encoding and a 16.02% reduction to ChatML-framed prompt encoding.
+- Full locked workspace all-target tests, workspace examples, device-binding,
+  architecture, HFQ-shape, generation, tokenizer, agentic-detector, and
+  clean-room source/license audits pass.
+- Unified GPU0 quant parity passes all ten cases. Report:
+  `/tmp/hipfire-integration-row51/quant-parity.md`.
+- Four available standard coherence cells pass after manual review. The 9B
+  reasoning sample reaches the short-mode bound while remaining on-topic; the
+  other outputs provide the requested answer, code, or valid tool call. Report:
+  `/tmp/hipfire-integration-row51/coherence.md`.
+- All four DFlash/DDTree cells report `ok=true` and `soft_warn=false`; prose
+  and code outputs were manually reviewed. Report:
+  `/tmp/hipfire-integration-row51/coherence-dflash.md`.
+- The Qwen3.6 27B agentic cell emits valid `name='read'` JSON with zero hard
+  failures and zero soft warnings. Report:
+  `/tmp/hipfire-integration-row51/agentic.md`.
+- PFlash remains explicitly skipped because the required local target/drafter
+  pair is absent; this is not counted as passing coverage.
+- Decision: accept row 51 as a semantic-preserving tokenizer hot-path
+  improvement, with the CPU speedup separately attributed and the full GPU0
+  inference path demonstrated non-regressing.

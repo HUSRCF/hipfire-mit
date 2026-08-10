@@ -20,6 +20,10 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M4: kernel fault localization | 44 | complete | deterministic kernel artifact provenance and staged compile/load/symbol failure context |
 | M5: clean-room composition | 45-46 | complete | one reproducible CPU/GPU integration gate, evidence manifest, fail-closed GPU selection, and mandatory generated-output review |
 | M6: multimodal input boundary | 47 | complete | one checked image-to-patch representation shared by all VL frontends, with exact visual-token metadata and fallible malformed-input handling |
+| M7: unified generation stops | 48 | complete | one stop-token union shared by all user-facing generation paths, with static drift detection |
+| M8: architecture-family adapters | 49 | complete | adapter-owned model-family identifiers, fail-closed unknown families, and shared execution foundations |
+| M9: HFQ consumer shapes | 50 | complete | load-time binding between file-declared payload shapes and model-consumer dimensions |
+| M10: tokenizer special-token scan | 51 | complete | byte-identical single-pass special-token discovery with reproducible CPU and GPU0 performance evidence |
 
 ## M0 evidence
 
@@ -706,7 +710,53 @@ and 141.1 tok/s. This batch claims safer format compatibility and no runtime
 regression, not a speedup.
 
 The conservative direction-table position is now complete through row 50 of
-2706; row 51 is next. The remaining direction count is 2656. Per user request,
-work pauses at this boundary. Direction rows remain audit inputs aggregated
-into independently specified implementation batches, not a promise of one Git
-commit per row.
+2706; row 51 is next. The remaining direction count is 2656. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.
+
+## M10 evidence
+
+### Single-pass special-token discovery
+
+Direction row 51 again emphasizes tokenizer and generation-path performance
+without relaxing input/output semantics. An independent audit of the permitted
+implementation found that every encode call searched the remaining prompt once
+for each registered special token. Ordinary user text normally contains none,
+so its common path repeatedly scanned the same bytes before BPE work began.
+
+Commit `df8c5408cbfd773513e668d9c974f47980a6e8a8` builds a fixed 256-bucket
+index from the first UTF-8 byte of each special token. Encoding now scans the
+input once and compares only the longest-first candidates that can begin at the
+current byte. The bucket order preserves the prior earliest-position and
+longest-at-position rules. UTF-8 continuation bytes never populate a bucket,
+and full-string `starts_with` checks still decide every match.
+
+A byte-token synthetic tokenizer compares the indexed implementation against
+the retained linear reference for ordinary text, overlapping and adjacent
+specials, non-angle delimiters, incomplete markers, and multibyte Unicode.
+All 187 runtime library tests pass. A static audit requires the fixed index,
+single-pass scanner, reference-parity test, and reproducible microbenchmark,
+and rejects reintroduction of exhaustive production searches; it is included
+in every integration run.
+
+On the same 4B MQ4 tokenizer and 3,000 iterations per sample, three fresh
+processes reduce plain-prompt median encode latency from 23,296.3 ns to
+22,496.5 ns (-3.43%) and framed-prompt latency from 12,955.7 ns to 10,880.2 ns
+(-16.02%). The full locked workspace all-target suite, all examples, clean-room
+audits, ten-cell quantization parity battery, four available standard coherence
+cells, four DFlash/DDTree cells, and the Qwen3.6 27B agentic cell also pass on
+GPU0. Manual review found coherent text, valid tool-call JSON, and no
+speculative or agentic warning.
+
+Three fresh GPU0 performance processes measure 1406.5, 1298.9, and 1276.0
+prefill tok/s and 141.7, 141.6, and 140.6 decode tok/s. Their medians are
+1298.9 and 141.6 tok/s. Relative to M9 they change by +1.62% and +0.57%, so the
+5% cross-batch expansion rule did not fire. Relative to the committed W7900
+floor they change by +5.84% and +0.50%. The GPU measurements establish full
+inference non-regression; the attributed speedup is limited to the separately
+measured CPU tokenizer path.
+
+The conservative direction-table position is now complete through row 51 of
+2706; row 52 is next. The remaining direction count is 2655. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.
