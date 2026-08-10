@@ -1076,3 +1076,31 @@ The conservative direction-table position is now complete through row 59 of
 2706; row 60 is next. The remaining direction count is 2647. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M19 evidence
+
+### Fail-closed architecture-family configuration
+
+Direction row 60 is a model-adapter correctness fix. Commit `b3ab919` makes
+the Qwen3.5, LLaMA/plain-Qwen, and Qwen3.5-VL adapters enforce their declared
+HFQ architecture families before parsing metadata. A caller can therefore no
+longer invoke a valid-looking config parser through the wrong adapter and
+silently obtain a configuration for an unsupported family. Diagnostics state
+the observed ID and the adapter's accepted IDs. The checks remain in the
+cold-path adapter boundary and do not alter forward kernels or model math.
+
+A dedicated audit pins all three production adapters to the same fail-closed
+contract. The complete workspace, MIT checks, eleven-cell quant parity,
+standard coherence, four DFlash/DDTree cells, and Qwen3.6 27B agentic cell
+pass on GPU0. Manual review found coherent output, clean speculative
+detectors, valid tool-call JSON, and zero agentic warnings.
+
+Three fresh performance processes measure 1,309.9, 1,312.2, and 1,281.1
+prefill tok/s and 140.9, 140.3, and 139.8 decode tok/s. Medians are 1,309.9
+and 140.3 tok/s, changing by +1.55% and -0.14% from M18, so no five-run
+expansion was required.
+
+The conservative direction-table position is now complete through row 60 of
+2706; row 61 is next. The remaining direction count is 2646. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.

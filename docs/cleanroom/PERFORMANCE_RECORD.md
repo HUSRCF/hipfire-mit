@@ -2025,3 +2025,43 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
   hard failures and zero soft warnings.
 - Decision: accept row 59 as a measured long-context capture extension with
   full MIT-boundary, numerical-continuity, and performance evidence.
+
+---
+
+## M19: fail-closed architecture-family configuration — 2026-08-11
+
+### Run identity
+
+- Regression parent: `32d8e98c7d1fa810cde6eeb71b9b3ad0b6f2c3d8`.
+- Candidate commit: `b3ab9197c72f0cc342d741bf9a0f0aa59ea09e13`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Qwen3.5 adapter SHA-256: `5462ce75661ed67f5eb671113844595c64176e938d924ce375b63c20aa33cde4`.
+- LLaMA adapter SHA-256: `4b7a9ff66201daa9d8387e6a156c992c9adddcae00b3a668f1996b155bdd31c2`.
+- Qwen3.5-VL adapter SHA-256: `b2a4c67fb01402d325456fe28c6c8b6100beef09fa6d12722a6701400f6fd844`.
+- Adapter audit SHA-256: `3a458239f9a570f128eca8502342f5476e8db80c4c126ae86dda78561146fa1a`.
+- Candidate diff SHA-256: `46eefa8901717237c0812b44d3f9aa8c7c8cfea35e6fe765db3e34a1693adc55`.
+- Reports md5: quant `0c77f2b6775483adbaf44e0799c6e189`, standard
+  `d6a1b13a6a98649035d9021953e50ddb`, DFlash
+  `a2f0627ef61dc1c6910d0a932e356b16`, agentic
+  `90d4598968ece5e47221505581cb2171`.
+- Full gate: `/tmp/hipfire-integration-row60/summary.md`.
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1309.9 | 1312.2 | 1281.1 | 1309.9 |
+| 4B MQ4 decode tok/s | 140.9 | 140.9 | 140.3 | 139.8 | 140.3 |
+
+### Decision
+
+- All three production adapters reject mismatched HFQ families before
+  metadata parsing, keeping architecture differences local to the adapter.
+- Full CPU and GPU0 gates pass. Normal medians change +1.55%/-0.14% from M18
+  and remain +6.73%/-0.43% versus the committed floor.
+- Generated outputs were manually reviewed; standard and DFlash/DDTree output
+  is coherent, all speculative detectors are clean, and agentic reports zero
+  hard failures and zero soft warnings.
+- Decision: accept row 60 as a cold-path model-adapter correctness fix with
+  full MIT-boundary and performance non-regression evidence.
