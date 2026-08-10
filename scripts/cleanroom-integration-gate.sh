@@ -35,6 +35,7 @@ CPU_STEPS=(
     greedy-batched-verify-audit
     kv-cache-footprint-audit
     hybrid-kv-allocation-audit
+    long-context-q8-position-audit
     generation-semantics-audit
     agentic-detector-self-check
     cleanroom-license
@@ -59,6 +60,7 @@ REQUIRED_SCRIPTS=(
     scripts/verify-greedy-batched-verify.sh
     scripts/verify-kv-cache-footprint.sh
     scripts/verify-hybrid-kv-allocation.sh
+    scripts/verify-long-context-q8-position-reuse.sh
     scripts/verify-generation-semantics.sh
     scripts/verify-bind-thread.sh
 )
@@ -208,6 +210,7 @@ execute_step() {
         greedy-batched-verify-audit) ./scripts/verify-greedy-batched-verify.sh ;;
         kv-cache-footprint-audit) ./scripts/verify-kv-cache-footprint.sh ;;
         hybrid-kv-allocation-audit) ./scripts/verify-hybrid-kv-allocation.sh ;;
+        long-context-q8-position-audit) ./scripts/verify-long-context-q8-position-reuse.sh ;;
         generation-semantics-audit) ./scripts/verify-generation-semantics.sh ;;
         agentic-detector-self-check) ./scripts/agentic-gate.sh --self-check ;;
         cleanroom-license) ./scripts/cleanroom-gate.sh ;;

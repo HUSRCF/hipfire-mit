@@ -1604,13 +1604,10 @@ pub fn forward_prefill_batch(
 /// model the function asserts rather than silently falling back, since the
 /// fallback would issue uploads that violate capture semantics.
 ///
-/// Capture-mode constraint: in capture mode `max_ctx_len` is baked to
-/// `kv_cache.physical_cap`. For Q8 KV at `physical_cap > LDS_CTX_LIMIT`
-/// (15000), `forward_prefill_chunk` would enter the per-position
-/// long-context fallback that issues `hip.malloc` + `memcpy_htod` per row
-/// — both capture-illegal. Reject that combination up-front; the asym KV
-/// modes have their own batched flash-masked kernels with no per-position
-/// uploads, so they are capture-safe at any context length.
+/// In capture mode `max_ctx_len` is baked to `kv_cache.physical_cap`.
+/// Long-context Q8 uses per-position flash launches, but their position
+/// arguments are non-owning views into the already uploaded batch positions,
+/// so the captured body performs no allocation or host-to-device upload.
 #[allow(clippy::too_many_arguments)]
 pub fn forward_prefill_batch_chunk_captured(
     gpu: &mut Gpu,
@@ -1641,21 +1638,6 @@ pub fn forward_prefill_batch_chunk_captured(
         is_batchable_la(l.w_down.gpu_dtype, arch));
     assert!(kv_ok && weights_ok,
         "forward_prefill_batch_chunk_captured requires batched-eligible weights + KV");
-
-    // The Q8 long-context fallback in `forward_prefill_chunk` issues
-    // `hip.malloc` + per-row `memcpy_htod` inside the layer loop, which
-    // would error or bake stale data under capture. The threshold is
-    // baked from `physical_cap` in capture mode, not the live seq_len, so
-    // we have to gate on the cap regardless of how many tokens this chunk
-    // carries. Asym KV paths run pure-batched kernels and stay safe.
-    const LDS_CTX_LIMIT: usize = 15000;
-    assert!(
-        !(kv_cache.quant_q8 && kv_cache.physical_cap > LDS_CTX_LIMIT),
-        "Q8 KV with physical_cap {} > {} hits the per-position long-context fallback, \
-         which issues hip.malloc + memcpy_htod inside the captured region. \
-         Use asym3 KV for capture at long context, or shrink physical_cap.",
-        kv_cache.physical_cap, LDS_CTX_LIMIT,
-    );
 
     forward_prefill_chunk(gpu, weights, config, tokens, start_pos, kv_cache, scratch, pbs, true)
 }
@@ -1894,29 +1876,23 @@ fn forward_prefill_chunk(
         } else if max_ctx_len > LDS_CTX_LIMIT {
             // Long-context Q8 fallback: per-position flash.
             //
-            // `pbs.positions` was uploaded as raw i32 bits but the dtype is
-            // F32 (slot-cosmetic, see PrefillBatchScratch::new). `download_f32`
-            // would reinterpret those bytes as floats, so positions like 15000
-            // would surface as ~1e-3 subnormals that cast to 0. Reconstruct
-            // from `start_pos + b` directly — the buffer layout is exactly
-            // [start_pos .. start_pos + n] in linear order.
+            // `pbs.positions` already contains raw i32 bits in linear order.
+            // Reuse a one-element device view for each row instead of issuing
+            // a loop-local allocation and host-to-device upload.
             let q_dim = config.n_heads * config.head_dim;
-            let pos_buf_tmp = gpu.hip.malloc(4)?;
             for b in 0..n {
                 let pos_b = start_pos + b;
                 let seq_len_b = pos_b + 1;
-                let pos_i32 = pos_b as i32;
-                gpu.hip.memcpy_htod(&pos_buf_tmp, &pos_i32.to_ne_bytes())?;
+                let pos_b_view = pbs.positions.sub_offset(b, 1);
                 let q_b = pbs.fa_q_batch.sub_offset(b * q_dim, q_dim);
                 let out_b = pbs.fa_attn_out_batch.sub_offset(b * q_dim, q_dim);
                 gpu.attention_flash_q8_0(
                     &q_b, &kv_cache.k_gpu[layer_idx], &kv_cache.v_gpu[layer_idx],
-                    &out_b, &pos_buf_tmp, seq_len_b,
+                    &out_b, &pos_b_view.buf, seq_len_b,
                     config.n_heads, config.n_kv_heads, config.head_dim,
                     kv_cache.physical_cap, &pbs.flash_partials,
                 )?;
             }
-            let _ = gpu.hip.free(pos_buf_tmp);
         } else {
             gpu.attention_q8_0_kv_batched_masked(
                 &pbs.fa_q_batch,
