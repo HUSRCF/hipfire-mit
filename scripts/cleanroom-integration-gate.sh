@@ -29,6 +29,7 @@ CPU_STEPS=(
     workspace-examples
     bind-thread-audit
     architecture-adapter-audit
+    adapter-config-family-audit
     hfq-consumer-shape-audit
     tokenizer-special-scan-audit
     speculative-embedding-audit
@@ -56,6 +57,7 @@ REQUIRED_SCRIPTS=(
     scripts/quant-parity-gate.sh
     scripts/speed-gate.sh
     scripts/verify-architecture-adapters.sh
+    scripts/verify-adapter-config-family.sh
     scripts/verify-hfq-consumer-shapes.sh
     scripts/verify-tokenizer-special-scan.sh
     scripts/verify-speculative-embedding.sh
@@ -208,6 +210,7 @@ execute_step() {
         workspace-examples) cargo check --workspace --locked --examples ;;
         bind-thread-audit) ./scripts/verify-bind-thread.sh ;;
         architecture-adapter-audit) ./scripts/verify-architecture-adapters.sh ;;
+        adapter-config-family-audit) ./scripts/verify-adapter-config-family.sh ;;
         hfq-consumer-shape-audit) ./scripts/verify-hfq-consumer-shapes.sh ;;
         tokenizer-special-scan-audit) ./scripts/verify-tokenizer-special-scan.sh ;;
         speculative-embedding-audit) ./scripts/verify-speculative-embedding.sh ;;

@@ -67,6 +67,12 @@ impl Architecture for Qwen35Vl {
     }
 
     fn config_from_hfq(hfq: &HfqFile) -> Result<Self::Config, String> {
+        if !Self::supports_arch_id(hfq.arch_id) {
+            return Err(format!(
+                "qwen35-vl: unsupported HFQ arch_id={} (expected 5 or 6)",
+                hfq.arch_id,
+            ));
+        }
         vision_config_from_hfq(hfq)
             .ok_or_else(|| "qwen35-vl: vision_config not found in HFQ metadata".to_string())
     }

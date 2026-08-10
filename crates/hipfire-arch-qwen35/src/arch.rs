@@ -29,9 +29,10 @@
 //!   - a discoverable contract for adding a new arch ("implement this trait
 //!     and register your `arch_id`").
 
-use crate::qwen35::{config_from_hfq as qwen35_config_from_hfq,
-                    load_weights as qwen35_load_weights,
-                    DeltaNetState, Qwen35Config, Qwen35Weights};
+use crate::qwen35::{
+    config_from_hfq as qwen35_config_from_hfq, load_weights as qwen35_load_weights, DeltaNetState,
+    Qwen35Config, Qwen35Weights,
+};
 use hipfire_runtime::arch::Architecture;
 use hipfire_runtime::hfq::HfqFile;
 use rdna_compute::Gpu;
@@ -63,6 +64,12 @@ impl Architecture for Qwen35 {
     }
 
     fn config_from_hfq(hfq: &HfqFile) -> Result<Self::Config, String> {
+        if !Self::supports_arch_id(hfq.arch_id) {
+            return Err(format!(
+                "qwen35: unsupported HFQ arch_id={} (expected 5 or 6)",
+                hfq.arch_id,
+            ));
+        }
         qwen35_config_from_hfq(hfq)
             .ok_or_else(|| "qwen35: failed to parse config from HFQ metadata".to_string())
     }

@@ -51,6 +51,12 @@ impl Architecture for Llama {
     }
 
     fn config_from_hfq(hfq: &HfqFile) -> Result<Self::Config, String> {
+        if !Self::supports_arch_id(hfq.arch_id) {
+            return Err(format!(
+                "llama: unsupported HFQ arch_id={} (expected 0 or 1)",
+                hfq.arch_id,
+            ));
+        }
         // `hfq::config_from_hfq` is the LLaMA-family HFQ metadata
         // parser — emits a `LlamaConfig` with the appropriate
         // `ModelArch` (Llama vs Qwen3) tag. It lives in the runtime
