@@ -65,35 +65,51 @@ pub enum ModelFamily {
 /// Architecture properties shared by HFQ producers and consumers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelArchitecture {
-    pub id: ArchitectureId,
-    pub family: ModelFamily,
-    pub is_moe: bool,
+    id: ArchitectureId,
 }
 
 impl ModelArchitecture {
+    /// Construct a target-model descriptor from a registered target ID.
+    /// Draft-only formats deliberately cannot become target architectures.
+    pub const fn from_target_id(id: ArchitectureId) -> Option<Self> {
+        match id.target_is_moe() {
+            Some(_) => Some(Self { id }),
+            None => None,
+        }
+    }
+
+    pub const fn id(self) -> ArchitectureId {
+        self.id
+    }
+
+    pub const fn family(self) -> ModelFamily {
+        match self.id {
+            ArchitectureId::Llama => ModelFamily::Llama,
+            ArchitectureId::Qwen => ModelFamily::Qwen,
+            ArchitectureId::Qwen35Dense | ArchitectureId::Qwen35Moe => ModelFamily::Qwen35,
+            ArchitectureId::DFlashDraft => unreachable!(),
+        }
+    }
+
+    pub const fn is_moe(self) -> bool {
+        matches!(self.id, ArchitectureId::Qwen35Moe)
+    }
+
     /// Resolve public GGUF/Hugging Face model-type aliases supported by the
     /// production target adapters. Unknown names deliberately return `None`.
     pub fn from_model_type(model_type: &str) -> Option<Self> {
         match model_type {
             "llama" | "mistral" => Some(Self {
                 id: ArchitectureId::Llama,
-                family: ModelFamily::Llama,
-                is_moe: false,
             }),
             "qwen2" | "qwen3" => Some(Self {
                 id: ArchitectureId::Qwen,
-                family: ModelFamily::Qwen,
-                is_moe: false,
             }),
             "qwen3_5" | "qwen3_5_text" => Some(Self {
                 id: ArchitectureId::Qwen35Dense,
-                family: ModelFamily::Qwen35,
-                is_moe: false,
             }),
             "qwen3moe" | "qwen3_5_moe" | "qwen3_5_moe_text" => Some(Self {
                 id: ArchitectureId::Qwen35Moe,
-                family: ModelFamily::Qwen35,
-                is_moe: true,
             }),
             _ => None,
         }
@@ -123,16 +139,17 @@ mod tests {
     #[test]
     fn target_aliases_resolve_to_owned_variants() {
         assert_eq!(
-            ModelArchitecture::from_model_type("mistral").unwrap().id,
+            ModelArchitecture::from_model_type("mistral").unwrap().id(),
             ArchitectureId::Llama,
         );
         assert_eq!(
-            ModelArchitecture::from_model_type("qwen2").unwrap().id,
+            ModelArchitecture::from_model_type("qwen2").unwrap().id(),
             ArchitectureId::Qwen,
         );
         let moe = ModelArchitecture::from_model_type("qwen3_5_moe_text").unwrap();
-        assert_eq!(moe.id, ArchitectureId::Qwen35Moe);
-        assert!(moe.is_moe);
+        assert_eq!(moe.id(), ArchitectureId::Qwen35Moe);
+        assert_eq!(moe.family(), ModelFamily::Qwen35);
+        assert!(moe.is_moe());
         assert_eq!(ModelArchitecture::from_model_type("gemma4"), None);
         assert_eq!(ModelArchitecture::from_model_type("dflash"), None);
     }
@@ -143,5 +160,25 @@ mod tests {
         assert_eq!(ArchitectureId::Qwen35Dense.target_is_moe(), Some(false));
         assert_eq!(ArchitectureId::Qwen35Moe.target_is_moe(), Some(true));
         assert_eq!(ArchitectureId::DFlashDraft.target_is_moe(), None);
+    }
+
+    #[test]
+    fn model_descriptors_derive_consistent_properties_from_target_ids() {
+        let cases = [
+            (ArchitectureId::Llama, ModelFamily::Llama, false),
+            (ArchitectureId::Qwen, ModelFamily::Qwen, false),
+            (ArchitectureId::Qwen35Dense, ModelFamily::Qwen35, false),
+            (ArchitectureId::Qwen35Moe, ModelFamily::Qwen35, true),
+        ];
+        for (id, family, is_moe) in cases {
+            let model = ModelArchitecture::from_target_id(id).unwrap();
+            assert_eq!(model.id(), id);
+            assert_eq!(model.family(), family);
+            assert_eq!(model.is_moe(), is_moe);
+        }
+        assert_eq!(
+            ModelArchitecture::from_target_id(ArchitectureId::DFlashDraft),
+            None
+        );
     }
 }

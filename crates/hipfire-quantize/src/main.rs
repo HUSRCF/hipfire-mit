@@ -3130,7 +3130,7 @@ fn run_gguf_pipeline(
     })?.to_string();
     let arch = hfq_architecture_from_source_name(&arch_str)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    let arch_id = arch.id.as_u32();
+    let arch_id = arch.id().as_u32();
     eprintln!("Architecture: {arch_str} (id={arch_id})");
 
     // Metadata JSON: must populate `config.*` so engine's `config_from_hfq`
@@ -3155,7 +3155,7 @@ fn run_gguf_pipeline(
     let signs2 = if needs_signs { gen_fwht_signs(1042, 256) } else { Vec::new() };
 
     // K-map setup for GGUF path
-    let is_moe = arch.is_moe;
+    let is_moe = arch.is_moe();
     let n_layers: usize = config_json
         .get("num_hidden_layers")
         .and_then(|v| v.as_u64())
@@ -3870,9 +3870,9 @@ fn main() {
         eprintln!("{e}");
         std::process::exit(2);
     });
-    let arch_id = arch.id.as_u32();
+    let arch_id = arch.id().as_u32();
     eprintln!("Architecture: {arch_str} (id={arch_id})");
-    let is_moe = arch.is_moe;
+    let is_moe = arch.is_moe();
     // Q8 router: always on for MoE models. 4-bit router quantization destroys
     // routing precision on precision-sensitive models (Qwen3.6-A3B: 152/256
     // expert rows drop below 0.99 cosine similarity at HFQ4G256). Cost: ~0.05%
@@ -5213,12 +5213,12 @@ mod tests {
 
     #[test]
     fn hfq_architecture_contract_covers_supported_aliases() {
-        assert_eq!(hfq_architecture_from_source_name("llama").unwrap().id, ArchitectureId::Llama);
-        assert_eq!(hfq_architecture_from_source_name("mistral").unwrap().id, ArchitectureId::Llama);
-        assert_eq!(hfq_architecture_from_source_name("qwen3").unwrap().id, ArchitectureId::Qwen);
-        assert_eq!(hfq_architecture_from_source_name("qwen3_5_text").unwrap().id, ArchitectureId::Qwen35Dense);
-        assert_eq!(hfq_architecture_from_source_name("qwen3_5_moe_text").unwrap().id, ArchitectureId::Qwen35Moe);
-        assert!(hfq_architecture_from_source_name("qwen3moe").unwrap().is_moe);
+        assert_eq!(hfq_architecture_from_source_name("llama").unwrap().id(), ArchitectureId::Llama);
+        assert_eq!(hfq_architecture_from_source_name("mistral").unwrap().id(), ArchitectureId::Llama);
+        assert_eq!(hfq_architecture_from_source_name("qwen3").unwrap().id(), ArchitectureId::Qwen);
+        assert_eq!(hfq_architecture_from_source_name("qwen3_5_text").unwrap().id(), ArchitectureId::Qwen35Dense);
+        assert_eq!(hfq_architecture_from_source_name("qwen3_5_moe_text").unwrap().id(), ArchitectureId::Qwen35Moe);
+        assert!(hfq_architecture_from_source_name("qwen3moe").unwrap().is_moe());
     }
 
     #[test]

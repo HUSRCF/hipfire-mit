@@ -20,6 +20,16 @@ if ! rg -Fq 'pub struct ModelArchitecture' "$registry"; then
     echo "quantizer architecture audit: shared model architecture registry is missing" >&2
     exit 1
 fi
+if rg -n 'pub (id|family|is_moe):' "$registry"; then
+    echo "quantizer architecture audit: model descriptor exposes forgeable properties" >&2
+    exit 1
+fi
+for accessor in 'from_target_id' 'fn id(' 'fn family(' 'fn is_moe('; do
+    if ! rg -Fq "$accessor" "$registry"; then
+        echo "quantizer architecture audit: invariant-preserving accessor is missing: $accessor" >&2
+        exit 1
+    fi
+done
 if rg -n "unknown .*architecture.*(treating|tagging).*llama|arch_id == 6" "$source_file"; then
     echo "quantizer architecture audit: legacy fallback or variant hard-code remains" >&2
     exit 1
@@ -33,4 +43,4 @@ if ! rg -Fq 'hfq_architecture_from_source_name("mistral")' "$source_file"; then
     exit 1
 fi
 
-echo "quantizer architecture audit: PASS (producer + consumer share wire registry)"
+echo "quantizer architecture audit: PASS (shared registry properties are derived from target IDs)"

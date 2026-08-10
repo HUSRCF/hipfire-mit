@@ -21,7 +21,7 @@ impl ModelArch {
     /// path. Mistral intentionally shares the LLaMA implementation, while
     /// Qwen2 and Qwen3 share the Qwen-specific normalization behavior.
     pub fn from_model_type(model_type: &str) -> Option<Self> {
-        match ModelArchitecture::from_model_type(model_type)?.family {
+        match ModelArchitecture::from_model_type(model_type)?.family() {
             ModelFamily::Llama => Some(Self::Llama),
             ModelFamily::Qwen => Some(Self::Qwen3),
             ModelFamily::Qwen35 => None,

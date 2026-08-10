@@ -17,3 +17,7 @@ parallel numeric maps.
 `0xFF` remains reserved for the non-production toy adapter and is not a
 registered on-disk format. New IDs must be added to the registry with
 round-trip, protocol-label, and producer/consumer coverage before use.
+
+Target-model descriptors have no public fields: family and dense/MoE
+properties are derived from the registered ID. Draft-only IDs cannot be
+constructed as target descriptors, preventing contradictory routing metadata.
