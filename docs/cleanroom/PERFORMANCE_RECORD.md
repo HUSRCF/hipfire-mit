@@ -984,3 +984,89 @@ shows the scalar path's instruction expansion and added register pressure.
   warnings. Report: `/tmp/agentic-gate-mq8-negative.md`.
 - Decision row 43 is closed as a measured negative experiment: retain the
   generalized signed hardware dot path and do not merge the scalar candidate.
+
+---
+
+## M4: kernel artifact provenance and staged failures — 2026-08-10
+
+### Run identity
+
+- Regression parent: `d3018c695a22d8ddeae3d6a5d184daed574eb86c`.
+- Candidate commit: `19a8e6d6d14bff8dec6af4231c936eb9da53f92b`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Candidate benchmark md5: `a9a5fe0b2c8b6e68a477bca6fc60d791`.
+- Candidate daemon md5: `eb74cf1ece190c3772ff9e11c60c3bcf`.
+- Candidate DFlash md5: `27d3d1b2b969f17e3d327f2aad54778f`.
+- Diagnostic example SHA-256:
+  `6263c1bf0dd2d002d6d2edc8068875ab665c704b3d9d3a55658824f0b2dbfc2e`.
+- Diagnostic HSACO SHA-256:
+  `3a2e5fd0502341f91588c764d6da2e7b6d7923e9b628c7ae7c4c7b7fbd771f79`.
+- Environment: GPU0-only visibility and the same ROCm 7.14 library,
+  model-directory, W7900 baseline, explicit DPM warm-up in the speed gate,
+  and `scripts/gpu-lock.sh` serialization used by the preceding runs.
+- Correctness commands: `cargo test --workspace --locked --all-targets`,
+  `cargo check --workspace --locked --examples`,
+  `cargo test -p rdna-compute --locked --lib`,
+  `./scripts/cleanroom-gate.sh`, `./scripts/quant-parity-gate.sh`,
+  `./scripts/coherence-gate.sh`, `./scripts/coherence-gate-dflash.sh`, and
+  `./scripts/agentic-gate.sh --fast`.
+- Diagnostic command: two fresh GPU0 invocations of
+  `target/release/examples/inspect_kernel_artifact`, first after creating the
+  module and then from the validated cache.
+- Performance command: five fresh invocations of
+  `./scripts/speed-gate.sh --fast`; each observation is best-of-two. Five
+  runs were retained because the preceding batch's unusually high median
+  differed by more than 5%.
+
+### Diagnostic result
+
+The final committed example reports:
+
+```text
+module=diagnostic_gemv
+arch=gfx1100
+source_arch_hash=6e0b453068533574
+origin=ValidatedCache
+validated=true
+artifact=.hipfire_kernels/diagnostic_gemv.hsaco
+```
+
+The fresh-cache invocation reported `RuntimeCompiled` with the same module,
+architecture, combined hash, and artifact path. Unit tests additionally cover
+validated precompiled and unvalidated packaged-fallback records. The staged
+error test verifies `compile`, `module_load`, and `function_lookup` context,
+including preservation of the original HIP error code and explicit
+`artifact=unavailable` before a code object exists.
+
+### Default-path regression measurements
+
+| Metric | Committed floor | Observation 1 | Observation 2 | Observation 3 | Observation 4 | Observation 5 | Median |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1276.5 | 1248.9 | 1248.1 | 1252.1 | 1275.7 | 1252.1 |
+| 4B MQ4 decode tok/s | 140.9 | 141.1 | 140.6 | 140.1 | 140.1 | 140.3 | 140.3 |
+
+The commit-hook repetition passes at 1369.9 prefill tok/s and 140.8 decode
+tok/s.
+
+### Decision
+
+- Candidate median deltas are +2.02% prefill and -0.43% decode. Every
+  observation passes the committed 5% regression tolerance. The five-run
+  prefill relative spread is 2.27%, so the candidate series itself is stable.
+- The change records one small host-side diagnostic per initialized module
+  and wraps only initialization failures. The kernel launch path and GPU
+  kernels are unchanged, so no speedup is attributed.
+- Unified GPU0 quant parity passes all ten cells. Report:
+  `/tmp/quant-parity-kernel-diagnostics.md`.
+- Four available standard coherence cells pass after manual review. Reports:
+  `/tmp/coherence-kernel-diagnostics.md` and hook repetition
+  `/tmp/coherence-20260810-110357.md`.
+- All four DFlash/DDTree cells report `ok=true` and `soft_warn=false`; prose
+  and code outputs were manually reviewed. Report:
+  `/tmp/coherence-dflash-kernel-diagnostics.md`.
+- The Qwen3.6 27B agentic cell emits valid `name='read'` JSON with zero
+  warnings. Reports: `/tmp/agentic-gate-kernel-diagnostics.md` and hook
+  repetition `/tmp/agentic-gate-20260810-110422.md`.
+- Decision row 44 is closed as a diagnostic capability: artifact provenance
+  and failure stage can now be queried without changing inference semantics.

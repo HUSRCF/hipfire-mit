@@ -17,6 +17,7 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M1: speculative decode foundation | 3-8 | complete | shared greedy acceptance contract, semantic statistics, deterministic tests, and GPU0 correctness/throughput acceptance |
 | M2: release and device execution | 10-18 | in progress | reproducible delivery and the device-execution foundation are complete; remaining quantization, maintenance, and integration directions are still open |
 | M3: quantization and context paths | 19-43 | in progress | strict HFQ boundaries and quant-payload layouts, ten-cell GPU/CPU quant parity gating including MQ8/MQ4, a reproducible MQ8 scalar-dot negative experiment, shared packed-KV allocation, and checked long-context position continuity are complete; full model-level format fidelity remains open |
+| M4: kernel fault localization | 44 | complete | deterministic kernel artifact provenance and staged compile/load/symbol failure context |
 
 ## M0 evidence
 
@@ -443,7 +444,42 @@ is non-regression evidence only: the committed file is an opt-in benchmark
 and does not modify inference execution. Full identities, hashes, ISA
 evidence, and observations are in `docs/cleanroom/PERFORMANCE_RECORD.md`.
 
-The conservative direction-table position is now complete through row 43 of
-2706; row 44 is next. Direction rows are audit inputs and are aggregated into
-independently specified implementation batches, so the remaining 2663 rows
-are not a promise of 2663 one-to-one Git commits.
+## M4 evidence
+
+### Kernel artifact provenance and staged failures
+
+Commit `19a8e6d6d14bff8dec6af4231c936eb9da53f92b` adds host-side
+observability at the JIT boundary without changing a kernel or the launch hot
+path. Each selected module now retains its module name, target architecture,
+combined source-and-architecture hash, artifact path, validation state, and
+one of four origins: validated precompiled, unvalidated packaged fallback,
+validated cache, or runtime compilation. The public query returns a cloned,
+module-sorted snapshot; it does no device work.
+
+Kernel initialization failures now preserve the original HIP error code and
+identify whether they occurred during source compilation, HSACO module load,
+or function-symbol lookup. Every error also includes module, function,
+architecture, and the artifact path when one exists. This converts formerly
+ambiguous loader failures into a layer-specific diagnostic without exposing
+kernel source text.
+
+Eight deterministic `rdna-compute` tests cover all four origins, validation
+semantics, architecture-sensitive source identity, deterministic ordering,
+and all three failure stages. The final GPU0 example reports `gfx1100`,
+`source_arch_hash=6e0b453068533574`, `origin=ValidatedCache`, and the exact
+validated HSACO path. An earlier fresh-cache invocation exercised
+`RuntimeCompiled` with the same identity.
+
+The full workspace all-target suite, workspace example check, clean-room
+gate, ten-cell quantization battery, four available standard coherence cells,
+all four DFlash/DDTree cells, and the Qwen3.6 agentic cell pass. Five fresh
+GPU0 speed observations have medians 1252.1 prefill tok/s and 140.3 decode
+tok/s, respectively +2.02% and -0.43% versus the W7900 floor; their prefill
+relative spread is 2.27%. The commit-hook repetition passes at 1369.9 and
+140.8 tok/s. No speedup is attributed to initialization-only diagnostics.
+Full evidence is in `docs/cleanroom/PERFORMANCE_RECORD.md`.
+
+The conservative direction-table position is now complete through row 44 of
+2706; row 45 is next. Direction rows are audit inputs and are aggregated into
+independently specified implementation batches, so the remaining 2662 rows
+are not a promise of 2662 one-to-one Git commits.
