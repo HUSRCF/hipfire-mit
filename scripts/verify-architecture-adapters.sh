@@ -50,4 +50,18 @@ if ! rg -q '<Qwen35 as Architecture>::protocol_label\(arch_id\)' "$daemon"; then
     exit 1
 fi
 
+for consumer in \
+    crates/hipfire-arch-qwen35/src/pflash.rs \
+    crates/hipfire-runtime/examples/pflash_load_demo.rs
+do
+    if rg -q 'arch_id == 5 \|\|.*arch_id == 6' "$consumer"; then
+        echo "architecture adapter audit: $consumer duplicated Qwen family membership" >&2
+        exit 1
+    fi
+    if ! rg -q '<Qwen35 as Architecture>::supports_arch_id\(' "$consumer"; then
+        echo "architecture adapter audit: $consumer bypasses Qwen family ownership" >&2
+        exit 1
+    fi
+done
+
 echo "architecture adapter audit: PASS (${#adapter_sources[@]} family adapters)"

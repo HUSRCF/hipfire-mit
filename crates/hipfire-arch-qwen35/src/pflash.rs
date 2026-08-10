@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! PFlash: speculative prefill compression for long-context inputs.
 //!
 //! Top-of-prefill compression stage. Runs a small drafter model over the
@@ -13,6 +14,7 @@
 //! selection land in subsequent phases.
 
 use hipfire_runtime::hfq::{self, HfqFile};
+use hipfire_runtime::arch::Architecture;
 use hipfire_runtime::llama::{self, ForwardScratch, KvCache, LlamaConfig, LlamaWeights};
 use hipfire_runtime::tokenizer::Tokenizer;
 use hip_bridge::HipResult;
@@ -21,6 +23,8 @@ use std::path::Path;
 
 #[cfg(feature = "deltanet")]
 use crate::qwen35;
+#[cfg(feature = "deltanet")]
+use crate::Qwen35;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PflashMode {
@@ -500,7 +504,7 @@ pub fn load_drafter(
     // smallest matched option and routes through the Hybrid branch.
     // qwen3-0.6b (arch_id=1, vocab 151743) routes through Plain and is
     // suitable for plain-Qwen3 targets only.
-    let is_hybrid = hfq.arch_id == 5 || hfq.arch_id == 6;
+    let is_hybrid = <Qwen35 as Architecture>::supports_arch_id(hfq.arch_id);
     #[cfg(feature = "deltanet")]
     {
         if is_hybrid {

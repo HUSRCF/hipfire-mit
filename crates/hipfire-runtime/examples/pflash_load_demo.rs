@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Smoke: load a Qwen3-family drafter into PflashState and verify
 //! tokenizer compatibility against a Qwen3.5 target.
 //!
@@ -12,6 +13,8 @@
 use hipfire_runtime::hfq::HfqFile;
 use hipfire_arch_qwen35::pflash::{self, PflashConfig, PflashState};
 use hipfire_arch_qwen35::qwen35;
+use hipfire_arch_qwen35::Qwen35;
+use hipfire_runtime::arch::Architecture;
 use hipfire_runtime::tokenizer::Tokenizer;
 use std::path::Path;
 use std::time::Instant;
@@ -44,7 +47,7 @@ fn main() {
     // VRAM estimate. arch_id distinguishes hybrid (5/6) from plain (1).
     let drafter_hfq_peek = HfqFile::open(Path::new(drafter_path)).expect("open drafter HFQ");
     let max_kv_seq = 4096usize;
-    let is_hybrid = drafter_hfq_peek.arch_id == 5 || drafter_hfq_peek.arch_id == 6;
+    let is_hybrid = <Qwen35 as Architecture>::supports_arch_id(drafter_hfq_peek.arch_id);
     let est_layers_hidden = if is_hybrid {
         let c = qwen35::config_from_hfq(&drafter_hfq_peek).expect("hybrid config");
         ("hybrid", c.n_layers, c.hidden_dim)
