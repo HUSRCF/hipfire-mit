@@ -3026,6 +3026,21 @@ pub struct PackedKvFootprint {
     pub total_allocated_bytes: usize,
 }
 
+/// Allocation comparison for a hybrid model whose recurrent layers do not
+/// consume packed KV storage. Filtered constructors retain one F32 K and one
+/// F32 V placeholder per non-KV layer to preserve absolute layer indexing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct HybridPackedKvFootprint {
+    pub format: PackedKvFormat,
+    pub total_layers: usize,
+    pub kv_layers: usize,
+    pub non_kv_layers: usize,
+    pub placeholder_bytes: usize,
+    pub all_layer_allocated_bytes: usize,
+    pub filtered_allocated_bytes: usize,
+    pub saved_bytes: usize,
+}
+
 /// Host-side allocation contract shared by single-GPU, filtered, and
 /// multi-GPU packed KV constructors. Kernel offsets are expressed in bytes,
 /// while allocations use F32-sized elements as raw storage.
@@ -3192,6 +3207,70 @@ pub fn packed_kv_footprint(
         allocated_k_bytes_per_layer,
         allocated_v_bytes_per_layer,
         total_allocated_bytes,
+    })
+}
+
+/// Compare all-layer and filtered packed-KV allocation without touching a GPU.
+///
+/// All arithmetic is checked, and the full-buffer component comes from
+/// [`packed_kv_footprint`], which shares the real constructor layout.
+pub fn hybrid_packed_kv_footprint(
+    format: PackedKvFormat,
+    total_layers: usize,
+    kv_layers: usize,
+    n_kv_heads: usize,
+    head_dim: usize,
+    logical_max_seq: usize,
+    physical_cap: usize,
+) -> HipResult<HybridPackedKvFootprint> {
+    if total_layers == 0 || kv_layers == 0 || kv_layers > total_layers {
+        return Err(HipError::new(
+            0,
+            "hybrid packed KV footprint requires 0 < kv_layers <= total_layers",
+        ));
+    }
+    let checked = |value: Option<usize>, label: &str| {
+        value.ok_or_else(|| {
+            HipError::new(
+                0,
+                &format!("hybrid packed KV footprint {label} overflows host address space"),
+            )
+        })
+    };
+    let kv = packed_kv_footprint(
+        format, kv_layers, n_kv_heads, head_dim, logical_max_seq, physical_cap,
+    )?;
+    let bytes_per_layer = checked(
+        kv.allocated_k_bytes_per_layer
+            .checked_add(kv.allocated_v_bytes_per_layer),
+        "bytes per layer",
+    )?;
+    let all_layer_allocated_bytes = checked(
+        bytes_per_layer.checked_mul(total_layers),
+        "all-layer bytes",
+    )?;
+    let non_kv_layers = total_layers - kv_layers;
+    let placeholder_bytes = checked(
+        non_kv_layers.checked_mul(2).and_then(|n| n.checked_mul(4)),
+        "placeholder bytes",
+    )?;
+    let filtered_allocated_bytes = checked(
+        kv.total_allocated_bytes.checked_add(placeholder_bytes),
+        "filtered bytes",
+    )?;
+    let saved_bytes = all_layer_allocated_bytes
+        .checked_sub(filtered_allocated_bytes)
+        .ok_or_else(|| HipError::new(0, "hybrid packed KV filtered bytes exceed all-layer bytes"))?;
+
+    Ok(HybridPackedKvFootprint {
+        format,
+        total_layers,
+        kv_layers,
+        non_kv_layers,
+        placeholder_bytes,
+        all_layer_allocated_bytes,
+        filtered_allocated_bytes,
+        saved_bytes,
     })
 }
 
@@ -5018,6 +5097,34 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.message.contains("total bytes"));
+    }
+
+    #[test]
+    fn hybrid_packed_kv_footprint_pins_qwen35_savings() {
+        let q8 = hybrid_packed_kv_footprint(
+            PackedKvFormat::Q8, 64, 16, 4, 256, 65_536, 2048,
+        ).unwrap();
+        assert_eq!(q8.non_kv_layers, 48);
+        assert_eq!(q8.placeholder_bytes, 384);
+        assert_eq!(q8.all_layer_allocated_bytes, 285_212_672);
+        assert_eq!(q8.filtered_allocated_bytes, 71_303_552);
+        assert_eq!(q8.saved_bytes, 213_909_120);
+
+        let asym3 = hybrid_packed_kv_footprint(
+            PackedKvFormat::Asym3, 64, 16, 4, 256, 65_536, 2048,
+        ).unwrap();
+        assert_eq!(asym3.all_layer_allocated_bytes, 195_035_136);
+        assert_eq!(asym3.filtered_allocated_bytes, 48_759_168);
+        assert_eq!(asym3.saved_bytes, 146_275_968);
+    }
+
+    #[test]
+    fn hybrid_packed_kv_footprint_rejects_invalid_layer_counts() {
+        for (total, kv) in [(0, 0), (64, 0), (16, 17)] {
+            assert!(hybrid_packed_kv_footprint(
+                PackedKvFormat::Q8, total, kv, 4, 256, 65_536, 2048,
+            ).is_err());
+        }
     }
 
     #[test]
