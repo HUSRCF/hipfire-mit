@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Qwen3.5-VL inference: image + text question → text answer.
 //! Usage: infer_vl <model.hfq> <image.png> [question...]
 
@@ -14,7 +15,6 @@ use std::time::Instant;
 static RUNNING: AtomicBool = AtomicBool::new(true);
 extern "C" fn handle_sigint(_: libc::c_int) { RUNNING.store(false, Ordering::SeqCst); }
 
-const IMAGE_SIZE: usize = 448;
 const IMAGE_PAD_ID: u32 = 248056;
 const VISION_START_ID: u32 = 248053;
 const VISION_END_ID: u32 = 248054;
@@ -59,21 +59,20 @@ fn main() {
 
     // Load and preprocess image
     eprintln!("Preprocessing image...");
-    let (pixels, img_h, img_w) = hipfire_arch_qwen35_vl::image::load_and_preprocess(
+    let prepared = hipfire_arch_qwen35_vl::image::prepare_image(
         Path::new(image_path),
         vision_config.patch_size,
+        vision_config.temporal_patch_size,
         vision_config.spatial_merge_size,
-    );
-    let grid_h = img_h / vision_config.patch_size;
-    let grid_w = img_w / vision_config.patch_size;
-    let n_patches = grid_h * grid_w;
-    let n_visual_tokens = n_patches / (vision_config.spatial_merge_size * vision_config.spatial_merge_size);
-    eprintln!("Image: {}x{} → {}x{} patches → {} visual tokens", img_w, img_h, grid_h, grid_w, n_visual_tokens);
-
-    // Extract patches for vision encoder
-    let patches = hipfire_arch_qwen35_vl::image::extract_patches(
-        &pixels, 3, img_h, img_w,
-        vision_config.patch_size, vision_config.temporal_patch_size,
+    ).expect("failed to normalize image input");
+    let n_visual_tokens = prepared.visual_tokens();
+    eprintln!(
+        "Image: {}x{} → {}x{} patches → {} visual tokens",
+        prepared.resized_width(),
+        prepared.resized_height(),
+        prepared.grid_width(),
+        prepared.grid_height(),
+        n_visual_tokens
     );
 
     // Init GPU first (needed for vision weight loading)
@@ -88,8 +87,14 @@ fn main() {
     // Forward = direct static call, not trait-dispatched (see arch.rs).
     eprintln!("Running vision encoder...");
     let t_vis = Instant::now();
-    let visual_tokens = qwen35_vl::vision_forward(&mut gpu, &vision_weights, &vision_config, &patches, grid_h, grid_w)
-        .expect("vision forward failed");
+    let visual_tokens = qwen35_vl::vision_forward(
+        &mut gpu,
+        &vision_weights,
+        &vision_config,
+        prepared.patches(),
+        prepared.grid_height(),
+        prepared.grid_width(),
+    ).expect("vision forward failed");
     eprintln!("Vision encoder: {:.1}s", t_vis.elapsed().as_secs_f32());
     assert_eq!(visual_tokens.len(), n_visual_tokens * text_config.dim);
 

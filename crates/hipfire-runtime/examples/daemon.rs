@@ -240,7 +240,6 @@ fn acquire_daemon_lock() -> std::fs::File {
     f
 }
 
-const IMAGE_SIZE: usize = 448;
 const IMAGE_PAD_ID: u32 = 248056;
 const VISION_START_ID: u32 = 248053;
 const VISION_END_ID: u32 = 248054;
@@ -2635,7 +2634,6 @@ fn generate_dflash(
     );
     let _ = stdout.flush();
 }
-
 /// Multi-GPU pipeline-parallel AR decode (Stage 7 of #58). Mirrors the pp=1
 /// `generate` Qwen3.5 branch feature-for-feature: ChatFrame ChatML wrap,
 /// EosFilter UTF-8 streaming + strip-think + stop_at, LoopGuard n-gram
@@ -4124,8 +4122,27 @@ fn generate_vl(m: &mut LoadedModel, gpu: &mut rdna_compute::Gpu, stdout: &mut st
     // Capacity guard — VL prompts include vision tokens + text + ChatML framing
     let tokenizer = m.tokenizer.as_ref().unwrap();
     let vision_config = m.vision_config.as_ref().unwrap();
-    let n_patches = (IMAGE_SIZE / vision_config.patch_size) * (IMAGE_SIZE / vision_config.patch_size);
-    let n_visual_tokens = n_patches / (vision_config.spatial_merge_size * vision_config.spatial_merge_size);
+    eprintln!("[VL-DEBUG] preprocessing image: {}", image_path);
+    let prepared = match hipfire_arch_qwen35_vl::image::prepare_image(
+        Path::new(image_path),
+        vision_config.patch_size,
+        vision_config.temporal_patch_size,
+        vision_config.spatial_merge_size,
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            let message = serde_json::to_string(&error.to_string())
+                .unwrap_or_else(|_| "\"invalid image input\"".to_string());
+            let _ = writeln!(
+                stdout,
+                r#"{{"type":"error","id":"{}","message":{}}}"#,
+                id, message
+            );
+            let _ = stdout.flush();
+            return;
+        }
+    };
+    let n_visual_tokens = prepared.visual_tokens();
     let prompt_est = tokenizer.encode(prompt).len() + n_visual_tokens + 20; // text + vision + ChatML overhead
     if m.eviction.is_none() && m.seq_pos + prompt_est + max_tokens > m.max_seq {
         eprintln!("[daemon/vl] context full ({}/{}) — resetting conversation", m.seq_pos, m.max_seq);
@@ -4147,25 +4164,22 @@ fn generate_vl(m: &mut LoadedModel, gpu: &mut rdna_compute::Gpu, stdout: &mut st
     let kv = m.kv_cache.as_mut().unwrap();
     let dn = m.dn_state.as_mut().unwrap();
 
-    // Load and preprocess image (smart resize matching HuggingFace)
-    eprintln!("[VL-DEBUG] preprocessing image: {}", image_path);
-    let (pixels, img_h, img_w) = hipfire_arch_qwen35_vl::image::load_and_preprocess(
-        Path::new(image_path),
-        vision_config.patch_size,
-        vision_config.spatial_merge_size,
+    eprintln!(
+        "[VL-DEBUG] normalized: {}x{} -> {}x{} patches -> {} visual tokens",
+        prepared.resized_width(),
+        prepared.resized_height(),
+        prepared.grid_width(),
+        prepared.grid_height(),
+        prepared.visual_tokens()
     );
-    eprintln!("[VL-DEBUG] preprocessed: {}x{}", img_w, img_h);
-    let grid_h = img_h / vision_config.patch_size;
-    let grid_w = img_w / vision_config.patch_size;
-    let n_patches = grid_h * grid_w;
-    let n_visual_tokens = n_patches / (vision_config.spatial_merge_size * vision_config.spatial_merge_size);
-
-    // Extract patches and run vision encoder
-    let patches = hipfire_arch_qwen35_vl::image::extract_patches(
-        &pixels, 3, img_h, img_w,
-        vision_config.patch_size, vision_config.temporal_patch_size,
-    );
-    let visual_tokens = qwen35_vl::vision_forward(gpu, vision_weights, vision_config, &patches, grid_h, grid_w)
+    let visual_tokens = qwen35_vl::vision_forward(
+        gpu,
+        vision_weights,
+        vision_config,
+        prepared.patches(),
+        prepared.grid_height(),
+        prepared.grid_width(),
+    )
         .expect("vision forward failed");
 
     // Build VL prompt via hipfire_runtime::prompt_frame. The VL user body splices

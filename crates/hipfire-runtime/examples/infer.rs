@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Unified Qwen3.5 inference — text-only or vision-language.
 //! Usage:
 //!   infer <model.hfq> [prompt...]                          # text-only
@@ -17,7 +18,6 @@ use std::time::Instant;
 static RUNNING: AtomicBool = AtomicBool::new(true);
 extern "C" fn handle_sigint(_: libc::c_int) { RUNNING.store(false, Ordering::SeqCst); }
 
-const IMAGE_SIZE: usize = 448;
 const IMAGE_PAD_ID: u32 = 248056;
 const VISION_START_ID: u32 = 248053;
 const VISION_END_ID: u32 = 248054;
@@ -87,19 +87,13 @@ fn main() {
         eprintln!("Vision: hidden={}, layers={}, heads={}", vision_config.hidden_size, vision_config.num_layers, vision_config.num_heads);
 
         let img = image_path.as_ref().unwrap();
-        let (pixels, img_h, img_w) = hipfire_arch_qwen35_vl::image::load_and_preprocess(
+        let prepared = hipfire_arch_qwen35_vl::image::prepare_image(
             Path::new(img),
             vision_config.patch_size,
+            vision_config.temporal_patch_size,
             vision_config.spatial_merge_size,
-        );
-        let grid_h = img_h / vision_config.patch_size;
-        let grid_w = img_w / vision_config.patch_size;
-        n_visual_tokens = (grid_h * grid_w) / (vision_config.spatial_merge_size * vision_config.spatial_merge_size);
-
-        let patches = hipfire_arch_qwen35_vl::image::extract_patches(
-            &pixels, 3, img_h, img_w,
-            vision_config.patch_size, vision_config.temporal_patch_size,
-        );
+        ).expect("failed to normalize image input");
+        n_visual_tokens = prepared.visual_tokens();
 
         eprintln!("Loading vision weights...");
         let vision_weights = qwen35_vl::load_vision_weights(&hfq, &vision_config, &mut gpu)
@@ -107,8 +101,14 @@ fn main() {
 
         eprintln!("Running vision encoder...");
         let t_vis = Instant::now();
-        let vt = qwen35_vl::vision_forward(&mut gpu, &vision_weights, &vision_config, &patches, grid_h, grid_w)
-            .expect("vision forward failed");
+        let vt = qwen35_vl::vision_forward(
+            &mut gpu,
+            &vision_weights,
+            &vision_config,
+            prepared.patches(),
+            prepared.grid_height(),
+            prepared.grid_width(),
+        ).expect("vision forward failed");
         eprintln!("Vision encoder: {:.1}s", t_vis.elapsed().as_secs_f32());
         drop(vision_weights); // free VRAM for text model
 
