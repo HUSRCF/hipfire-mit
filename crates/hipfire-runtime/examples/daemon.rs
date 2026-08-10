@@ -1587,6 +1587,14 @@ fn load_model(path: &str, max_seq: usize, draft_path: Option<&str>, kv_mode_over
 
         let weights = <Qwen35 as Architecture>::load_weights(&mut hfq, &config, gpu)?;
 
+        // Qwen3.5 hybrid models carry KV only in FullAttention layers. Keep
+        // absolute layer indices stable with one-element placeholders for LA
+        // layers, while allocating the physical token capacity only for the
+        // layers that actually execute KV reads/writes.
+        let is_kv_layer: Vec<bool> = config.layer_types.iter()
+            .map(|kind| *kind == LayerType::FullAttention)
+            .collect();
+
         // MMQ per-weight screening (#87): pre-screen all weight matrices at
         // load time so the first prefill doesn't pay the screening overhead.
         // Results are cached by device pointer in gpu.mmq_screen_cache.
@@ -1619,7 +1627,7 @@ fn load_model(path: &str, max_seq: usize, draft_path: Option<&str>, kv_mode_over
         let kv = match kv_mode.as_str() {
             "q8" => {
                 eprintln!("  KV cache: Q8");
-                llama::KvCache::new_gpu_q8_capped(gpu, config.n_layers, config.n_kv_heads, config.head_dim, max_seq, physical_cap).map_err(|e| format!("{e}"))?
+                llama::KvCache::new_gpu_q8_capped_filtered(gpu, &is_kv_layer, config.n_kv_heads, config.head_dim, max_seq, physical_cap).map_err(|e| format!("{e}"))?
             }
             "asym4" | "turbo4" => {
                 llama::KvCache::new_gpu_asym4_capped(gpu, config.n_layers, config.n_kv_heads, config.head_dim, max_seq, physical_cap).map_err(|e| format!("{e}"))?
@@ -1628,7 +1636,7 @@ fn load_model(path: &str, max_seq: usize, draft_path: Option<&str>, kv_mode_over
                 llama::KvCache::new_gpu_asym2_capped(gpu, config.n_layers, config.n_kv_heads, config.head_dim, max_seq, physical_cap).map_err(|e| format!("{e}"))?
             }
             "asym3" | "turbo3" | "turbo" | "auto" | "" => {
-                llama::KvCache::new_gpu_asym3_capped(gpu, config.n_layers, config.n_kv_heads, config.head_dim, max_seq, physical_cap).map_err(|e| format!("{e}"))?
+                llama::KvCache::new_gpu_asym3_capped_filtered(gpu, &is_kv_layer, config.n_kv_heads, config.head_dim, max_seq, physical_cap).map_err(|e| format!("{e}"))?
             }
             other => {
                 eprintln!("  KV cache: unrecognized '{other}', defaulting to asym3");

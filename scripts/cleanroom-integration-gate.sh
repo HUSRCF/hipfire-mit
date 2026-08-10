@@ -34,6 +34,7 @@ CPU_STEPS=(
     speculative-embedding-audit
     greedy-batched-verify-audit
     kv-cache-footprint-audit
+    hybrid-kv-allocation-audit
     generation-semantics-audit
     agentic-detector-self-check
     cleanroom-license
@@ -57,6 +58,7 @@ REQUIRED_SCRIPTS=(
     scripts/verify-speculative-embedding.sh
     scripts/verify-greedy-batched-verify.sh
     scripts/verify-kv-cache-footprint.sh
+    scripts/verify-hybrid-kv-allocation.sh
     scripts/verify-generation-semantics.sh
     scripts/verify-bind-thread.sh
 )
@@ -205,6 +207,7 @@ execute_step() {
         speculative-embedding-audit) ./scripts/verify-speculative-embedding.sh ;;
         greedy-batched-verify-audit) ./scripts/verify-greedy-batched-verify.sh ;;
         kv-cache-footprint-audit) ./scripts/verify-kv-cache-footprint.sh ;;
+        hybrid-kv-allocation-audit) ./scripts/verify-hybrid-kv-allocation.sh ;;
         generation-semantics-audit) ./scripts/verify-generation-semantics.sh ;;
         agentic-detector-self-check) ./scripts/agentic-gate.sh --self-check ;;
         cleanroom-license) ./scripts/cleanroom-gate.sh ;;
