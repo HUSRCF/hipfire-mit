@@ -124,6 +124,13 @@ fn model_arch_label(arch_id: u32) -> &'static str {
         .unwrap_or("unknown")
 }
 
+/// Pipeline-parallel generation does not own a cross-device draft/target
+/// coordination path. Reject the combination before loading either model;
+/// accepting it would create a model state that can only dispatch AR.
+fn pp_dflash_requires_single_gpu(pp: usize, has_draft: bool) -> bool {
+    pp > 1 && has_draft
+}
+
 #[cfg(test)]
 mod adapter_family_tests {
     use super::*;
@@ -149,6 +156,14 @@ mod adapter_family_tests {
         assert_eq!(model_arch_label(1), "qwen3");
         assert_eq!(model_arch_label(5), "qwen3_5");
         assert_eq!(model_arch_label(6), "qwen3_5_moe");
+    }
+
+    #[test]
+    fn pipeline_parallel_dflash_fails_closed() {
+        assert!(!pp_dflash_requires_single_gpu(1, true));
+        assert!(!pp_dflash_requires_single_gpu(2, false));
+        assert!(pp_dflash_requires_single_gpu(2, true));
+        assert!(pp_dflash_requires_single_gpu(8, true));
     }
 }
 
@@ -706,10 +721,8 @@ fn main() {
                 let pp = msg.get("params").and_then(|p| p.get("pp"))
                     .and_then(|v| v.as_u64()).unwrap_or(1) as usize;
                 if pp > 1 {
-                    if draft_path.is_some()
-                        && std::env::var("HIPFIRE_PP_DFLASH").ok().as_deref() != Some("1")
-                    {
-                        let _ = writeln!(stdout, r#"{{"type":"error","message":"DFlash speculative decode requires pp=1 in v1 (set HIPFIRE_PP_DFLASH=1 to opt into the experimental pp>1 PRD path; note PR2-4 of docs/plans/hetero-pflash-dflash.prd are not yet implemented — the load message will accept but generate will not run cross-card spec-decode). See issue #58 v1.1 roadmap."}}"#);
+                    if pp_dflash_requires_single_gpu(pp, draft_path.is_some()) {
+                        let _ = writeln!(stdout, r#"{{"type":"error","message":"DFlash speculative decode requires pp=1; cross-device draft/target coordination is not implemented"}}"#);
                         let _ = stdout.flush();
                         continue;
                     }
