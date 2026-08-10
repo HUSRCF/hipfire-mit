@@ -2981,6 +2981,51 @@ enum PackedKvKind {
     Asym4,
 }
 
+/// Packed KV representation used by [`packed_kv_footprint`].
+///
+/// This public enum is intentionally smaller than the runtime's full set of
+/// cache flags: it covers the packed layouts whose allocation and kernel
+/// strides share the checked [`PackedKvLayout`] contract below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackedKvFormat {
+    Q8,
+    Asym2,
+    Asym3,
+    Asym4,
+}
+
+impl From<PackedKvFormat> for PackedKvKind {
+    fn from(value: PackedKvFormat) -> Self {
+        match value {
+            PackedKvFormat::Q8 => Self::Q8,
+            PackedKvFormat::Asym2 => Self::Asym2,
+            PackedKvFormat::Asym3 => Self::Asym3,
+            PackedKvFormat::Asym4 => Self::Asym4,
+        }
+    }
+}
+
+/// Deterministic allocation record for a packed KV cache.
+///
+/// `allocated_*` includes the F32-storage rounding used by the real
+/// constructors. `total_allocated_bytes` covers K and V across `kv_layers`;
+/// callers with filtered hybrid models pass only the number of FA/KV layers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct PackedKvFootprint {
+    pub format: PackedKvFormat,
+    pub kv_layers: usize,
+    pub n_kv_heads: usize,
+    pub head_dim: usize,
+    pub logical_max_seq: usize,
+    pub physical_cap: usize,
+    pub k_bytes_per_head: usize,
+    pub v_bytes_per_head: usize,
+    pub allocated_k_bytes_per_layer: usize,
+    pub allocated_v_bytes_per_layer: usize,
+    pub total_allocated_bytes: usize,
+}
+
 /// Host-side allocation contract shared by single-GPU, filtered, and
 /// multi-GPU packed KV constructors. Kernel offsets are expressed in bytes,
 /// while allocations use F32-sized elements as raw storage.
@@ -3091,6 +3136,63 @@ impl PackedKvLayout {
             v_elems: elems(v_bytes_per_head, "V")?,
         })
     }
+}
+
+/// Plan and record packed KV allocation without touching a GPU.
+///
+/// The result is derived from the same checked layout used by single-GPU,
+/// filtered, and multi-GPU constructors, so evidence reports cannot silently
+/// drift from actual allocation sizes or kernel byte strides.
+pub fn packed_kv_footprint(
+    format: PackedKvFormat,
+    kv_layers: usize,
+    n_kv_heads: usize,
+    head_dim: usize,
+    logical_max_seq: usize,
+    physical_cap: usize,
+) -> HipResult<PackedKvFootprint> {
+    if kv_layers == 0 {
+        return Err(HipError::new(0, "packed KV footprint requires kv_layers > 0"));
+    }
+    let layout = PackedKvLayout::new(
+        format.into(),
+        n_kv_heads,
+        head_dim,
+        logical_max_seq,
+        physical_cap,
+    )?;
+    let checked = |value: Option<usize>, label: &str| {
+        value.ok_or_else(|| {
+            HipError::new(
+                0,
+                &format!("packed KV footprint {label} overflows host address space"),
+            )
+        })
+    };
+    let allocated_k_bytes_per_layer = checked(layout.k_elems.checked_mul(4), "K bytes")?;
+    let allocated_v_bytes_per_layer = checked(layout.v_elems.checked_mul(4), "V bytes")?;
+    let allocated_bytes_per_layer = checked(
+        allocated_k_bytes_per_layer.checked_add(allocated_v_bytes_per_layer),
+        "bytes per layer",
+    )?;
+    let total_allocated_bytes = checked(
+        allocated_bytes_per_layer.checked_mul(kv_layers),
+        "total bytes",
+    )?;
+
+    Ok(PackedKvFootprint {
+        format,
+        kv_layers,
+        n_kv_heads,
+        head_dim,
+        logical_max_seq,
+        physical_cap,
+        k_bytes_per_head: layout.k_bytes_per_head,
+        v_bytes_per_head: layout.v_bytes_per_head,
+        allocated_k_bytes_per_layer,
+        allocated_v_bytes_per_layer,
+        total_allocated_bytes,
+    })
 }
 
 /// GPU-resident KV cache for autoregressive generation.
@@ -4874,6 +4976,48 @@ mod tests {
         let err = PackedKvLayout::new(PackedKvKind::Q8, usize::MAX, 32, 1, 1)
             .unwrap_err();
         assert!(err.message.contains("overflows host address space"));
+    }
+
+    #[test]
+    fn packed_kv_footprint_records_real_rounded_allocations() {
+        let formats = [
+            PackedKvFormat::Q8,
+            PackedKvFormat::Asym2,
+            PackedKvFormat::Asym3,
+            PackedKvFormat::Asym4,
+        ];
+        let totals = formats.map(|format| {
+            packed_kv_footprint(format, 16, 4, 256, 65_536, 2048)
+                .unwrap()
+                .total_allocated_bytes
+        });
+        assert_eq!(totals, [71_303_168, 44_564_480, 48_758_784, 52_953_088]);
+
+        let record =
+            packed_kv_footprint(PackedKvFormat::Asym3, 16, 4, 256, 65_536, 2048)
+                .unwrap();
+        assert_eq!(record.logical_max_seq, 65_536);
+        assert_eq!(record.physical_cap, 2048);
+        assert_eq!(record.k_bytes_per_head, 100);
+        assert_eq!(record.v_bytes_per_head, 272);
+        assert_eq!(record.allocated_k_bytes_per_layer, 819_200);
+        assert_eq!(record.allocated_v_bytes_per_layer, 2_228_224);
+        assert_eq!(record.total_allocated_bytes, 48_758_784);
+    }
+
+    #[test]
+    fn packed_kv_footprint_rejects_empty_or_overflowing_records() {
+        assert!(packed_kv_footprint(PackedKvFormat::Q8, 0, 1, 32, 1, 1).is_err());
+        let err = packed_kv_footprint(
+            PackedKvFormat::Q8,
+            usize::MAX,
+            1,
+            32,
+            1,
+            1,
+        )
+        .unwrap_err();
+        assert!(err.message.contains("total bytes"));
     }
 
     #[test]

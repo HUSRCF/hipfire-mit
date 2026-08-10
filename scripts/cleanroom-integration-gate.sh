@@ -32,6 +32,7 @@ CPU_STEPS=(
     hfq-consumer-shape-audit
     tokenizer-special-scan-audit
     speculative-embedding-audit
+    kv-cache-footprint-audit
     generation-semantics-audit
     agentic-detector-self-check
     cleanroom-license
@@ -53,6 +54,7 @@ REQUIRED_SCRIPTS=(
     scripts/verify-hfq-consumer-shapes.sh
     scripts/verify-tokenizer-special-scan.sh
     scripts/verify-speculative-embedding.sh
+    scripts/verify-kv-cache-footprint.sh
     scripts/verify-generation-semantics.sh
     scripts/verify-bind-thread.sh
 )
@@ -199,6 +201,7 @@ execute_step() {
         hfq-consumer-shape-audit) ./scripts/verify-hfq-consumer-shapes.sh ;;
         tokenizer-special-scan-audit) ./scripts/verify-tokenizer-special-scan.sh ;;
         speculative-embedding-audit) ./scripts/verify-speculative-embedding.sh ;;
+        kv-cache-footprint-audit) ./scripts/verify-kv-cache-footprint.sh ;;
         generation-semantics-audit) ./scripts/verify-generation-semantics.sh ;;
         agentic-detector-self-check) ./scripts/agentic-gate.sh --self-check ;;
         cleanroom-license) ./scripts/cleanroom-gate.sh ;;
