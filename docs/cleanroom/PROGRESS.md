@@ -1395,3 +1395,37 @@ The conservative direction-table position is now complete through row 69 of
 2706; row 70 is next. The remaining direction count is 2637. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M29 evidence
+
+### Shared architecture wire registry
+
+Direction row 70 calls for architecture differences to stay behind independent
+adapters while common execution infrastructure remains shared. The existing
+quantizer, runtime parsers, DFlash converter, and three production adapters all
+needed the same stable HFQ identifiers, but each still carried some private
+numeric or alias mapping. That duplication allowed producer and consumer
+contracts to drift even after row 69 added fail-closed validation.
+
+Commit `2ab4f63` introduces the dependency-free `hipfire-format` crate as the
+single wire registry. It owns target IDs 0, 1, 5, and 6, DFlash draft ID 20,
+public source-model aliases, dense/MoE classification, and protocol labels.
+Quantization producers, runtime consumers, and the LLaMA, Qwen3.5, and Qwen3.5
+VL adapters now consume the same definitions. The runtime hot path remains
+statically dispatched, and ID 0's externally reported label is corrected from
+the legacy Qwen label to canonical `llama`.
+
+The complete CPU and GPU0 batteries pass, including eleven quant-parity cases,
+standard coherence, four clean DFlash/DDTree cases, and Agentic with zero hard
+failures or soft warnings. Manual review found generated text fluent, on-topic,
+and non-looping. The bounded 9B reasoning case stops inside its reasoning span
+and is recorded as incomplete rather than treated as a successful final answer.
+
+Three fresh speed processes measure 1,290.7, 1,281.0, and 1,292.9 prefill
+tok/s and 141.5, 140.5, and 140.4 decode tok/s. Medians are 1,290.7 and 140.5,
+changing +1.54% and -0.43% from M28; no five-run expansion was required.
+
+The conservative direction-table position is now complete through row 70 of
+2706; row 71 is next. The remaining direction count is 2636. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.

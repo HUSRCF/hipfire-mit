@@ -2453,3 +2453,54 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
   so they are not claimed as complete answers.
 - Decision: accept row 69 as a cold-path architecture-wire consistency fix
   with explicit compatibility, MIT-boundary, quality, and performance evidence.
+
+---
+
+## M29: shared architecture wire registry — 2026-08-11
+
+### Run identity
+
+- Regression parent: `f0963b556f153ec435603de8e8a5fc1c1d865089`.
+- Candidate commit: `2ab4f63a3c2ab3cef635ea9840bb015ba531d3da`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Architecture registry SHA-256: `9866f2f3b4b4095f75353e0bf35c8d8fb08077757b668761e78810e610c8ae26`.
+- Registry documentation SHA-256: `e7e01ea60b7e6ba4574c6ac7ff1c8cfc16887382dff019be7f5a7902501a1423`.
+- Quantizer/runtime SHA-256: `80ed0874b7621967aa7aa943becbecf72cb092867154b4ea544ae34678f60081` /
+  `30f820144f7c2a0da38fe000770c5047a347c1959f1973dd2375c66fae83af15`.
+- LLaMA/Qwen/Qwen-VL adapter SHA-256:
+  `783ac3d3dd563ddf3e18dbc5139fd0f1d021d93f7075e1b51f415ec2af416941` /
+  `2569ed1cc39501771a80792a697804dcb98a61d434993ef9a6deb247145438b0` /
+  `307bfe18b97f376bc9e16d4b97aacbf438f19627771b6cf1050c981d2cb9e542`.
+- Candidate diff SHA-256: `c5b81d429e0759bfebb5788d040c7c586050d86566c7b74191dc9ab915e8ad31`.
+- Reports md5: quant `c3f5103687e4c5c4270576f8cb10cf12`, standard
+  `4dfa8693880de65b07335704450108ba`, DFlash
+  `bde45f161cd453e3c822a9e76c139512`, agentic
+  `9d3b7d29183c701db55b9912e7a64437`.
+- Full gate: `/tmp/hipfire-integration-row70/summary.md`.
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1290.7 | 1281.0 | 1292.9 | 1290.7 |
+| 4B MQ4 decode tok/s | 140.9 | 141.5 | 140.5 | 140.4 | 140.5 |
+
+### Decision
+
+- A pure, dependency-free `hipfire-format` crate now owns stable HFQ target
+  and draft IDs, public model aliases, dense/MoE classification, and protocol
+  labels. Quantizers, runtime parsers, and three production adapters consume
+  that registry instead of maintaining parallel numeric maps.
+- Runtime execution remains statically dispatched; this batch changes only
+  cold-path format selection. Header ID 0 now reports its canonical `llama`
+  protocol label, while ID 1 retains `qwen3`.
+- Focused registry and adapter tests, all 86 quantizer tests, and full CPU/GPU0
+  gates pass. Performance medians change +1.54%/-0.43% from M28 and remain
+  +5.17%/-0.28% versus the floor; no five-run expansion was required.
+- Generated outputs were manually reviewed as on-topic and non-looping. All
+  four speculative cases are clean and Agentic reports zero warnings. The
+  bounded 9B reasoning sample ends inside its reasoning span, so it is not
+  claimed as a complete answer.
+- Decision: accept row 70 as a format-boundary architecture refactor with
+  explicit producer/consumer, MIT-boundary, quality, and performance evidence.
