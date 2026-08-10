@@ -1361,3 +1361,37 @@ The conservative direction-table position is now complete through row 68 of
 2706; row 69 is next. The remaining direction count is 2638. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M28 evidence
+
+### HFQ header/metadata architecture pairing
+
+Direction row 69 closes the next model-adaptation consistency gap. Although
+the quantizer now rejects unknown source families, runtime GGUF and HFQ
+configuration paths could still interpret an unknown metadata model type as
+LLaMA. The HFQ path also accepted a valid scalar configuration when its model
+family or dense/MoE shape disagreed with the header ID used for dispatch.
+
+Commit `01f7f94` introduces one dense-family model-type contract shared by the
+GGUF and HFQ parsers. LLaMA and Mistral map explicitly to header ID 0, while
+Qwen2 and Qwen3 map to ID 1; unknown types and mismatched IDs return failure.
+The Qwen3.5 parser similarly requires ID 5 to carry a dense shape and ID 6 to
+carry an MoE shape. Explicit Mistral support is also added to the quantizer so
+fail-closed handling does not remove an intended LLaMA-family member. Focused
+unit tests and strengthened static audits pin both contracts.
+
+The full CPU and GPU0 batteries pass, including eleven quant-parity cases,
+standard coherence, four clean DFlash/DDTree cases, and Agentic with zero hard
+failures or soft warnings. Manual review found the generated text on-topic and
+non-looping. The bounded 4B code and 9B reasoning samples stop inside their
+reasoning spans, so they remain explicit completeness limitations rather than
+claimed final answers.
+
+Three fresh speed processes measure 1,318.3, 1,271.1, and 1,261.7 prefill
+tok/s and 141.3, 141.1, and 140.3 decode tok/s. Medians are 1,271.1 and 141.1,
+changing -2.49% and +0.43% from M27; no five-run expansion was required.
+
+The conservative direction-table position is now complete through row 69 of
+2706; row 70 is next. The remaining direction count is 2637. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.

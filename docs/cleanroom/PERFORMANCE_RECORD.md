@@ -2408,3 +2408,48 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
   speculative detectors are clean and agentic reports zero warnings.
 - Decision: accept row 68 as a quantization cold-path model-adaptation fix
   with explicit fail-closed, MIT-boundary, quality, and performance evidence.
+
+---
+
+## M28: HFQ header/metadata architecture pairing — 2026-08-11
+
+### Run identity
+
+- Regression parent: `e4a3b1efe35bf3f40cb8ec65209e5f8ac5ccf950`.
+- Candidate commit: `01f7f94c4c616549689d09f79f6bed55c3141d2b`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Dense model contract SHA-256: `d37c594fbaef757cfcc45cf121a8396adbcbf15a1cd3f2f0138aa5505e01591c`.
+- HFQ config parser SHA-256: `394c585e247c983d249e656426929a8c5b1703e737cf22279470917080029264`.
+- Qwen adapter/model SHA-256: `a01e33d2624a2b30e7bd8b563d28d2fd1c471636bbb8fb7a9275f140bf38bda8` /
+  `e02d21d618ab290a1432b9d7577a63c443f7177ccba00b7bf1a2a0f119a25253`.
+- Quantizer SHA-256: `f66aebd7c7a0a132cd9f908b36b6fa5d37ad7c46344cb1bef6e2330d74a9ce4d`.
+- Candidate diff SHA-256: `e61f62a9d0aa4c6c06072ddf762ae461144970d6b16775075e7f713eeb534a62`.
+- Reports md5: quant `b4f377f6a0282747fdfb53c8240b572e`, standard
+  `cb3c63253441baaf1334bf2093ab0d67`, DFlash
+  `5b2fb1e129615db918a1eb61839cc847`, agentic
+  `13f0b14ca3e161f53e9ded8e0dc8498d`.
+- Full gate: `/tmp/hipfire-integration-row69/summary.md`.
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1318.3 | 1271.1 | 1261.7 | 1271.1 |
+| 4B MQ4 decode tok/s | 140.9 | 141.3 | 141.1 | 140.3 | 141.1 |
+
+### Decision
+
+- GGUF and HFQ dense-model parsing now share an explicit LLaMA/Mistral and
+  Qwen2/Qwen3 family contract; unsupported model types fail closed.
+- HFQ header IDs must agree with metadata family, and Qwen IDs 5/6 must agree
+  with the parsed dense/MoE shape. Mistral is explicitly retained as ID 0.
+- Focused tests, all 86 quantizer tests, and full CPU/GPU0 gates pass.
+  Performance medians change -2.49%/+0.43% from M27 and remain
+  +3.57%/+0.14% versus the floor; no five-run expansion was required.
+- Generated outputs were manually reviewed as on-topic and non-looping; all
+  speculative detectors are clean and agentic reports zero warnings. The
+  bounded 4B code and 9B reasoning samples end inside their reasoning spans,
+  so they are not claimed as complete answers.
+- Decision: accept row 69 as a cold-path architecture-wire consistency fix
+  with explicit compatibility, MIT-boundary, quality, and performance evidence.
