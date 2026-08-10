@@ -4,6 +4,7 @@
 
 use crate::gguf::{GgmlType, GgufFile, TensorInfo};
 use crate::multi_gpu::Gpus;
+use hipfire_format::{ArchitectureId, ModelArchitecture, ModelFamily};
 use hip_bridge::{HipError, HipResult};
 use rdna_compute::{DType, Gpu, GpuTensor};
 use std::path::Path;
@@ -20,17 +21,20 @@ impl ModelArch {
     /// path. Mistral intentionally shares the LLaMA implementation, while
     /// Qwen2 and Qwen3 share the Qwen-specific normalization behavior.
     pub fn from_model_type(model_type: &str) -> Option<Self> {
-        match model_type {
-            "llama" | "mistral" => Some(Self::Llama),
-            "qwen2" | "qwen3" => Some(Self::Qwen3),
-            _ => None,
+        match ModelArchitecture::from_model_type(model_type)?.family {
+            ModelFamily::Llama => Some(Self::Llama),
+            ModelFamily::Qwen => Some(Self::Qwen3),
+            ModelFamily::Qwen35 => None,
         }
     }
 
     /// Check that HFQ header routing agrees with the metadata model type.
     /// This prevents a valid metadata blob from selecting the wrong adapter.
     pub fn matches_hfq_arch_id(self, arch_id: u32) -> bool {
-        matches!((self, arch_id), (Self::Llama, 0) | (Self::Qwen3, 1))
+        match self {
+            Self::Llama => arch_id == ArchitectureId::Llama.as_u32(),
+            Self::Qwen3 => arch_id == ArchitectureId::Qwen.as_u32(),
+        }
     }
 }
 

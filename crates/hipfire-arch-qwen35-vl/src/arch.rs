@@ -36,6 +36,7 @@
 
 use crate::qwen35_vl::{load_vision_weights, vision_config_from_hfq, VisionConfig, VisionWeights};
 use hipfire_runtime::arch::Architecture;
+use hipfire_runtime::format::ArchitectureId;
 use hipfire_runtime::hfq::HfqFile;
 use rdna_compute::Gpu;
 
@@ -55,11 +56,14 @@ impl Architecture for Qwen35Vl {
         // impl returns the same canonical id as Qwen35: 5. The actual id
         // in the HFQ file is the source of truth for the daemon's
         // arch-dispatch ladder.
-        5
+        ArchitectureId::Qwen35Dense.as_u32()
     }
 
     fn supports_arch_id(arch_id: u32) -> bool {
-        matches!(arch_id, 5 | 6)
+        matches!(
+            ArchitectureId::from_u32(arch_id),
+            Some(ArchitectureId::Qwen35Dense | ArchitectureId::Qwen35Moe)
+        )
     }
 
     fn name() -> &'static str {

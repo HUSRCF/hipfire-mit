@@ -159,7 +159,7 @@ mod adapter_family_tests {
 
     #[test]
     fn protocol_labels_remain_compatible() {
-        assert_eq!(model_arch_label(0), "qwen3");
+        assert_eq!(model_arch_label(0), "llama");
         assert_eq!(model_arch_label(1), "qwen3");
         assert_eq!(model_arch_label(5), "qwen3_5");
         assert_eq!(model_arch_label(6), "qwen3_5_moe");

@@ -677,11 +677,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hipfire-format"
+version = "0.1.20"
+
+[[package]]
 name = "hipfire-quantize"
 version = "0.1.20"
 dependencies = [
  "byteorder",
  "faer",
+ "hipfire-format",
  "memmap2",
  "rayon",
  "serde",
@@ -700,6 +705,7 @@ dependencies = [
  "hipfire-arch-qwen35-vl",
  "hipfire-atlas",
  "hipfire-detect",
+ "hipfire-format",
  "libc",
  "memmap2",
  "minijinja",

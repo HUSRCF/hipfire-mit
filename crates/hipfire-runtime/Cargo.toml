@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 [package]
 name = "hipfire-runtime"
 version.workspace = true
@@ -47,6 +48,7 @@ arch-qwen35-vl = []
 arch-llama = []
 
 [dependencies]
+hipfire-format = { path = "../hipfire-format" }
 hip-bridge = { path = "../hip-bridge" }
 rdna-compute = { path = "../rdna-compute" }
 memmap2 = "0.9"

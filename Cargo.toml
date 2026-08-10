@@ -1,9 +1,11 @@
+# SPDX-License-Identifier: MIT
 [workspace]
 resolver = "2"
 members = [
     "crates/hip-bridge",
     "crates/hsa-bridge",
     "crates/rdna-compute",
+    "crates/hipfire-format",
     "crates/hipfire-runtime",
     "crates/hipfire-arch-qwen35",
     "crates/hipfire-arch-qwen35-vl",

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "hipfire-format"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared HFQ wire-format architecture registry"
+
+[dependencies]

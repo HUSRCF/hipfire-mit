@@ -16,6 +16,10 @@ for source in "${adapter_sources[@]}"; do
         echo "architecture adapter audit: $source does not declare family ownership" >&2
         exit 1
     fi
+    if ! rg -q 'ArchitectureId' "$source"; then
+        echo "architecture adapter audit: $source bypasses the shared wire registry" >&2
+        exit 1
+    fi
 done
 
 for source in \
@@ -78,4 +82,4 @@ do
     fi
 done
 
-echo "architecture adapter audit: PASS (${#adapter_sources[@]} family adapters)"
+echo "architecture adapter audit: PASS (${#adapter_sources[@]} registry-backed family adapters)"

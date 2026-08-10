@@ -11,6 +11,7 @@ mod gguf_input;
 mod gptq;
 mod hessian_io;
 
+use hipfire_format::{ArchitectureId, ModelArchitecture};
 use memmap2::Mmap;
 use std::collections::HashMap;
 use std::fs::File;
@@ -94,29 +95,15 @@ static LM_HEAD_FORMAT: OnceLock<GgufFormat> = OnceLock::new();
 // AWQ-scaled and corrupt logits (0.67 → 13.5 KLD blowup, master-doc §6 rule 5).
 static LM_HEAD_AWQ_ENABLED: OnceLock<bool> = OnceLock::new();
 
-/// Architecture properties written into the HFQ header. Keep source-format
-/// aliases and variant capabilities in one cold-path contract so GGUF and
-/// Safetensors inputs cannot silently disagree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct HfqArchitecture {
-    id: u32,
-    is_moe: bool,
-}
-
-impl HfqArchitecture {
-    fn from_source_name(name: &str) -> Result<Self, String> {
-        match name {
-            "llama" | "mistral" => Ok(Self { id: 0, is_moe: false }),
-            "qwen2" | "qwen3" => Ok(Self { id: 1, is_moe: false }),
-            "qwen3_5" | "qwen3_5_text" => Ok(Self { id: 5, is_moe: false }),
-            "qwen3moe" | "qwen3_5_moe" | "qwen3_5_moe_text" => {
-                Ok(Self { id: 6, is_moe: true })
-            }
-            other => Err(format!(
-                "unsupported model architecture '{other}'; refusing to tag it as a compatible HFQ family"
-            )),
-        }
-    }
+/// Resolve architecture properties through the shared HFQ wire registry.
+/// The local wrapper retains a quantizer-specific diagnostic while keeping
+/// aliases and IDs owned by `hipfire-format`.
+fn hfq_architecture_from_source_name(name: &str) -> Result<ModelArchitecture, String> {
+    ModelArchitecture::from_model_type(name).ok_or_else(|| {
+        format!(
+            "unsupported model architecture '{name}'; refusing to tag it as a compatible HFQ family"
+        )
+    })
 }
 
 // ─── Safetensors Parser ─────────────────────────────────────────────────────
@@ -3141,9 +3128,9 @@ fn run_gguf_pipeline(
             "GGUF metadata is missing required general.architecture",
         )
     })?.to_string();
-    let arch = HfqArchitecture::from_source_name(&arch_str)
+    let arch = hfq_architecture_from_source_name(&arch_str)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    let arch_id = arch.id;
+    let arch_id = arch.id.as_u32();
     eprintln!("Architecture: {arch_str} (id={arch_id})");
 
     // Metadata JSON: must populate `config.*` so engine's `config_from_hfq`
@@ -3879,11 +3866,11 @@ fn main() {
         eprintln!("config.json is missing required model_type; refusing to tag it as LLaMA");
         std::process::exit(2);
     });
-    let arch = HfqArchitecture::from_source_name(arch_str).unwrap_or_else(|e| {
+    let arch = hfq_architecture_from_source_name(arch_str).unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(2);
     });
-    let arch_id = arch.id;
+    let arch_id = arch.id.as_u32();
     eprintln!("Architecture: {arch_str} (id={arch_id})");
     let is_moe = arch.is_moe;
     // Q8 router: always on for MoE models. 4-bit router quantization destroys
@@ -5226,17 +5213,17 @@ mod tests {
 
     #[test]
     fn hfq_architecture_contract_covers_supported_aliases() {
-        assert_eq!(HfqArchitecture::from_source_name("llama").unwrap(), HfqArchitecture { id: 0, is_moe: false });
-        assert_eq!(HfqArchitecture::from_source_name("mistral").unwrap(), HfqArchitecture { id: 0, is_moe: false });
-        assert_eq!(HfqArchitecture::from_source_name("qwen3").unwrap(), HfqArchitecture { id: 1, is_moe: false });
-        assert_eq!(HfqArchitecture::from_source_name("qwen3_5_text").unwrap(), HfqArchitecture { id: 5, is_moe: false });
-        assert_eq!(HfqArchitecture::from_source_name("qwen3_5_moe_text").unwrap(), HfqArchitecture { id: 6, is_moe: true });
-        assert_eq!(HfqArchitecture::from_source_name("qwen3moe").unwrap(), HfqArchitecture { id: 6, is_moe: true });
+        assert_eq!(hfq_architecture_from_source_name("llama").unwrap().id, ArchitectureId::Llama);
+        assert_eq!(hfq_architecture_from_source_name("mistral").unwrap().id, ArchitectureId::Llama);
+        assert_eq!(hfq_architecture_from_source_name("qwen3").unwrap().id, ArchitectureId::Qwen);
+        assert_eq!(hfq_architecture_from_source_name("qwen3_5_text").unwrap().id, ArchitectureId::Qwen35Dense);
+        assert_eq!(hfq_architecture_from_source_name("qwen3_5_moe_text").unwrap().id, ArchitectureId::Qwen35Moe);
+        assert!(hfq_architecture_from_source_name("qwen3moe").unwrap().is_moe);
     }
 
     #[test]
     fn hfq_architecture_contract_rejects_unknown_families() {
-        let error = HfqArchitecture::from_source_name("gemma4").unwrap_err();
+        let error = hfq_architecture_from_source_name("gemma4").unwrap_err();
         assert!(error.contains("unsupported model architecture 'gemma4'"));
         assert!(error.contains("refusing to tag"));
     }

@@ -34,6 +34,7 @@ use crate::qwen35::{
     Qwen35Config, Qwen35Weights,
 };
 use hipfire_runtime::arch::Architecture;
+use hipfire_runtime::format::ArchitectureId;
 use hipfire_runtime::hfq::HfqFile;
 use rdna_compute::Gpu;
 
@@ -59,11 +60,14 @@ impl Architecture for Qwen35 {
         // Returns the dense ID as the canonical "Qwen3.5 family" marker;
         // the actual id loaded at runtime is on `HfqFile::arch_id` and is
         // either 5 or 6.
-        5
+        ArchitectureId::Qwen35Dense.as_u32()
     }
 
     fn supports_arch_id(arch_id: u32) -> bool {
-        matches!(arch_id, 5 | 6)
+        matches!(
+            ArchitectureId::from_u32(arch_id),
+            Some(ArchitectureId::Qwen35Dense | ArchitectureId::Qwen35Moe)
+        )
     }
 
     fn name() -> &'static str {
@@ -71,17 +75,19 @@ impl Architecture for Qwen35 {
     }
 
     fn protocol_label(arch_id: u32) -> Option<&'static str> {
-        match arch_id {
-            5 => Some("qwen3_5"),
-            6 => Some("qwen3_5_moe"),
+        match ArchitectureId::from_u32(arch_id) {
+            Some(id @ (ArchitectureId::Qwen35Dense | ArchitectureId::Qwen35Moe)) => {
+                Some(id.protocol_label())
+            }
             _ => None,
         }
     }
 
     fn is_moe_arch_id(arch_id: u32) -> Option<bool> {
-        match arch_id {
-            5 => Some(false),
-            6 => Some(true),
+        match ArchitectureId::from_u32(arch_id) {
+            Some(id @ (ArchitectureId::Qwen35Dense | ArchitectureId::Qwen35Moe)) => {
+                id.target_is_moe()
+            }
             _ => None,
         }
     }

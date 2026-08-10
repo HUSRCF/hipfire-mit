@@ -12,6 +12,7 @@
 //! same trait surface for LLaMA-family bring-up.
 
 use hipfire_runtime::arch::Architecture;
+use hipfire_runtime::format::ArchitectureId;
 use hipfire_runtime::hfq::{self, HfqFile};
 use hipfire_runtime::llama::{ForwardScratch, LlamaConfig, LlamaWeights};
 use rdna_compute::Gpu;
@@ -39,11 +40,14 @@ impl Architecture for Llama {
         // is read off the HFQ metadata inside `config_from_hfq`,
         // so the bring-up triple does not need a separate marker
         // type per arch_id.
-        0
+        ArchitectureId::Llama.as_u32()
     }
 
     fn supports_arch_id(arch_id: u32) -> bool {
-        matches!(arch_id, 0 | 1)
+        matches!(
+            ArchitectureId::from_u32(arch_id),
+            Some(ArchitectureId::Llama | ArchitectureId::Qwen)
+        )
     }
 
     fn name() -> &'static str {
@@ -51,9 +55,12 @@ impl Architecture for Llama {
     }
 
     fn protocol_label(arch_id: u32) -> Option<&'static str> {
-        // Keep the existing daemon protocol label for ids 0/1. This hook
-        // centralizes ownership without changing clients in this milestone.
-        Self::supports_arch_id(arch_id).then_some("qwen3")
+        match ArchitectureId::from_u32(arch_id) {
+            Some(id @ (ArchitectureId::Llama | ArchitectureId::Qwen)) => {
+                Some(id.protocol_label())
+            }
+            _ => None,
+        }
     }
 
     fn config_from_hfq(hfq: &HfqFile) -> Result<Self::Config, String> {
@@ -112,7 +119,7 @@ mod tests {
         assert!(Llama::supports_arch_id(1));
         assert!(!Llama::supports_arch_id(5));
         assert!(!Llama::supports_arch_id(0xFF));
-        assert_eq!(Llama::protocol_label(0), Some("qwen3"));
+        assert_eq!(Llama::protocol_label(0), Some("llama"));
         assert_eq!(Llama::protocol_label(1), Some("qwen3"));
         assert_eq!(Llama::protocol_label(0xFF), None);
         assert_eq!(Llama::is_moe_arch_id(0), Some(false));

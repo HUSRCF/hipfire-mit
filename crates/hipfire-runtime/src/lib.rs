@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! hipfire-runtime: GGUF model loading and LLaMA inference on RDNA GPUs.
 //!
 //! This crate is arch-agnostic. Architecture implementations live in
@@ -8,6 +9,9 @@
 //! filter, loop guard, eviction (TriAttn, CASK), spec-decode primitives
 //! (DFlash, DDTree), demand paging (cpu_router, weight_pager), and the
 //! [`arch::Architecture`] trait.
+
+/// Shared HFQ wire identifiers and source-model aliases.
+pub use hipfire_format as format;
 
 pub mod arch;
 pub mod eval_common;

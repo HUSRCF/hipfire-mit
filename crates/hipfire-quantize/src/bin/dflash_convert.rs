@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! dflash_convert: Convert a HuggingFace DFlash draft safetensors + config.json
 //! into a hipfire `.hfq` file with a dflash metadata section.
 //!
@@ -32,6 +33,7 @@
 //! dflash drafts from Qwen3/Qwen3.5 by both arch_id and the presence of
 //! the top-level `dflash` key in metadata.
 
+use hipfire_format::ArchitectureId;
 use memmap2::Mmap;
 use std::collections::HashMap;
 use std::fs::File;
@@ -311,7 +313,7 @@ fn quantize_mq4g256(f32_data: &[f32], signs1: &[f32], signs2: &[f32]) -> Vec<u8>
 
 const HFQ_MAGIC: &[u8; 4] = b"HFQM";
 const HFQ_VERSION: u32 = 1;
-const ARCH_ID_DFLASH_DRAFT: u32 = 20;
+const ARCH_ID_DFLASH_DRAFT: u32 = ArchitectureId::DFlashDraft.as_u32();
 
 #[repr(u8)]
 #[derive(Clone, Copy)]

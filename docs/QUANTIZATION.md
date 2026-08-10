@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: MIT -->
 # Quantization
 
 How hipfire stores weights and KV cache. This is the design / math
@@ -175,7 +176,7 @@ breakthroughs. But they add up.
 ```
 0x00  "HFQM"        (magic, 4 bytes)
 0x04  version       (u32 LE = 1)
-0x08  arch_id       (u32 LE — 0=llama, 1=qwen3, 5=qwen3_5, 6=qwen3_5_moe)
+0x08  arch_id       (u32 LE — see docs/architecture-ids.md)
 0x0C  n_tensors     (u32 LE)
 0x10  metadata_offset  (u64 LE)
 0x18  data_offset      (u64 LE — 4096-aligned)
