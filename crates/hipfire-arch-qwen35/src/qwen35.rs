@@ -153,6 +153,7 @@ pub struct Qwen35Config {
 
 pub fn config_from_hfq(hfq: &HfqFile) -> Option<Qwen35Config> {
     let meta: serde_json::Value = serde_json::from_str(&hfq.metadata_json).ok()?;
+    hipfire_runtime::arch::validate_target_metadata_value(hfq.arch_id, &meta).ok()?;
     let config = meta.get("config")?;
     let tc = config.get("text_config").unwrap_or(config);
 

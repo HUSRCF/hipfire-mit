@@ -24,6 +24,7 @@ done
 llama_model=crates/hipfire-runtime/src/llama.rs
 llama_hfq=crates/hipfire-runtime/src/hfq.rs
 qwen_model=crates/hipfire-arch-qwen35/src/qwen35.rs
+qwen_vl_model=crates/hipfire-arch-qwen35-vl/src/qwen35_vl.rs
 
 if ! rg -Fq 'ModelArch::from_model_type(arch_str)?' "$llama_model" "$llama_hfq"; then
     echo "adapter config-family audit: GGUF/HFQ parsers bypass the shared model-type contract" >&2
@@ -41,5 +42,16 @@ if ! rg -Fq 'variant_matches_config(hfq.arch_id, num_experts > 0)' "$qwen_model"
     echo "adapter config-family audit: Qwen dense/MoE header/config pairing is unchecked" >&2
     exit 1
 fi
+if ! rg -Fq 'validate_target_metadata_architecture(hfq.arch_id, &hfq.metadata_json)' \
+    crates/hipfire-arch-llama/src/arch.rs; then
+    echo "adapter config-family audit: LLaMA metadata declarations are unchecked" >&2
+    exit 1
+fi
+for source_file in "$qwen_model" "$qwen_vl_model"; do
+    if ! rg -Fq 'validate_target_metadata_value(hfq.arch_id, &meta)' "$source_file"; then
+        echo "adapter config-family audit: metadata declarations are unchecked in $source_file" >&2
+        exit 1
+    fi
+done
 
-echo "adapter config-family audit: PASS (family and variant metadata fail closed)"
+echo "adapter config-family audit: PASS (header, declarations, and variant shape agree)"

@@ -42,8 +42,67 @@
 //!      is loaded, the daemon/CLI knows the concrete type at compile
 //!      time.
 
+use crate::format::{ArchitectureId, ModelArchitecture};
 use crate::hfq::HfqFile;
 use rdna_compute::Gpu;
+
+/// Validate every architecture declaration carried by target-model metadata.
+/// Missing, unknown, or contradictory declarations fail closed before an
+/// adapter interprets model-specific shape fields.
+pub fn validate_target_metadata_architecture(
+    arch_id: u32,
+    metadata_json: &str,
+) -> Result<ModelArchitecture, String> {
+    let metadata: serde_json::Value = serde_json::from_str(metadata_json)
+        .map_err(|error| format!("invalid HFQ metadata JSON: {error}"))?;
+    validate_target_metadata_value(arch_id, &metadata)
+}
+
+/// Value-based form for adapters that already parsed the metadata JSON.
+pub fn validate_target_metadata_value(
+    arch_id: u32,
+    metadata: &serde_json::Value,
+) -> Result<ModelArchitecture, String> {
+    let id = ArchitectureId::from_u32(arch_id)
+        .ok_or_else(|| format!("unregistered target HFQ arch_id={arch_id}"))?;
+    let expected = ModelArchitecture::from_target_id(id)
+        .ok_or_else(|| format!("HFQ arch_id={arch_id} is not a target-model format"))?;
+
+    let config = metadata.get("config");
+    let text_config = config.and_then(|value| value.get("text_config"));
+    let declarations = [
+        ("architecture", metadata.get("architecture")),
+        (
+            "config.model_type",
+            config.and_then(|value| value.get("model_type")),
+        ),
+        (
+            "config.text_config.model_type",
+            text_config.and_then(|value| value.get("model_type")),
+        ),
+    ];
+
+    let mut seen = 0usize;
+    for (path, value) in declarations {
+        let Some(value) = value else { continue };
+        seen += 1;
+        let model_type = value
+            .as_str()
+            .ok_or_else(|| format!("HFQ metadata {path} must be a string"))?;
+        let declared = ModelArchitecture::from_model_type(model_type)
+            .ok_or_else(|| format!("unsupported HFQ metadata {path}='{model_type}'"))?;
+        if declared != expected {
+            return Err(format!(
+                "HFQ arch_id={arch_id} disagrees with {path}='{model_type}'"
+            ));
+        }
+    }
+
+    if seen == 0 {
+        return Err("HFQ metadata has no architecture declaration".to_string());
+    }
+    Ok(expected)
+}
 
 /// Bring-up contract for a hipfire architecture.
 ///
@@ -298,4 +357,39 @@ pub struct EosFilterOverrides {
     /// If `Some`, override whether to strip `<think>...</think>` blocks
     /// from the visible stream. Default is on for thinking-mode arches.
     pub strip_think: Option<bool>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_architecture_accepts_consistent_wrapper_and_text_types() {
+        let dense = r#"{"architecture":"qwen3_5","config":{"model_type":"qwen3_5","text_config":{"model_type":"qwen3_5_text"}}}"#;
+        let moe = r#"{"architecture":"qwen3_5_moe","config":{"model_type":"qwen3_5_moe","text_config":{"model_type":"qwen3_5_moe_text"}}}"#;
+
+        assert_eq!(
+            validate_target_metadata_architecture(5, dense)
+                .unwrap()
+                .id(),
+            ArchitectureId::Qwen35Dense,
+        );
+        assert!(validate_target_metadata_architecture(6, moe)
+            .unwrap()
+            .is_moe());
+    }
+
+    #[test]
+    fn metadata_architecture_rejects_missing_unknown_or_mismatched_types() {
+        let missing = r#"{"config":{"hidden_size":2048}}"#;
+        let unknown = r#"{"architecture":"gemma4","config":{}}"#;
+        let mismatch = r#"{"architecture":"qwen3_5","config":{"text_config":{"model_type":"qwen3_5_moe_text"}}}"#;
+
+        assert!(validate_target_metadata_architecture(5, missing).is_err());
+        assert!(validate_target_metadata_architecture(5, unknown).is_err());
+        assert!(validate_target_metadata_architecture(5, mismatch).is_err());
+        assert!(
+            validate_target_metadata_architecture(20, r#"{"architecture":"qwen3_5"}"#).is_err()
+        );
+    }
 }

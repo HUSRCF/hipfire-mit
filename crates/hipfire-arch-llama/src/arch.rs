@@ -11,7 +11,7 @@
 //! design rationale; PR 11 just adds a second implementation of the
 //! same trait surface for LLaMA-family bring-up.
 
-use hipfire_runtime::arch::Architecture;
+use hipfire_runtime::arch::{validate_target_metadata_architecture, Architecture};
 use hipfire_runtime::format::ArchitectureId;
 use hipfire_runtime::hfq::{self, HfqFile};
 use hipfire_runtime::llama::{ForwardScratch, LlamaConfig, LlamaWeights};
@@ -56,9 +56,7 @@ impl Architecture for Llama {
 
     fn protocol_label(arch_id: u32) -> Option<&'static str> {
         match ArchitectureId::from_u32(arch_id) {
-            Some(id @ (ArchitectureId::Llama | ArchitectureId::Qwen)) => {
-                Some(id.protocol_label())
-            }
+            Some(id @ (ArchitectureId::Llama | ArchitectureId::Qwen)) => Some(id.protocol_label()),
             _ => None,
         }
     }
@@ -70,6 +68,8 @@ impl Architecture for Llama {
                 hfq.arch_id,
             ));
         }
+        validate_target_metadata_architecture(hfq.arch_id, &hfq.metadata_json)
+            .map_err(|error| format!("llama: {error}"))?;
         // `hfq::config_from_hfq` is the LLaMA-family HFQ metadata
         // parser — emits a `LlamaConfig` with the appropriate
         // `ModelArch` (Llama vs Qwen3) tag. It lives in the runtime
