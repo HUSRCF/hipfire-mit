@@ -1306,3 +1306,31 @@ The conservative direction-table position is now complete through row 66 of
 2706; row 67 is next. The remaining direction count is 2640. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M26 evidence
+
+### Adapter-owned Qwen variant classification
+
+Direction row 67 closes a remaining architecture-ownership gap. The DFlash
+MQ3 admission check knew the Qwen dense identifier directly as
+`hfq.arch_id == 5`, even though family membership and protocol labels had
+already moved into architecture adapters. That duplicate would reject a new
+dense family ID until the daemon was edited separately.
+
+Commit `9d3cc2f` adds a dense/MoE classification hook to the architecture
+contract. The Qwen3.5 adapter owns ID 5 as dense and ID 6 as MoE; LLaMA uses
+the dense default. DFlash admission now consumes that capability. Adapter
+unit tests cover supported and unknown IDs, and the architecture audit rejects
+a return to daemon-side variant ownership.
+
+The full CPU and GPU0 batteries pass, including eleven quant-parity cases,
+standard coherence, four clean DFlash/DDTree detector cases, and the agentic
+cell with zero hard failures or soft warnings. Three fresh speed processes
+measure 1,270.7, 1,279.6, and 1,265.6 prefill tok/s and 140.8, 140.8, and
+139.8 decode tok/s. Medians are 1,270.7 and 140.8 tok/s, changing by +0.03%
+and +0.72% from M25, so no five-run expansion was required.
+
+The conservative direction-table position is now complete through row 67 of
+2706; row 68 is next. The remaining direction count is 2639. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.

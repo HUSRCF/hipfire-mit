@@ -2326,3 +2326,44 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
 - Decision: accept row 66 as a control-plane and operator-surface convergence
   change with fail-closed coverage, single-GPU PFlash evidence, MIT-boundary
   checks, and performance non-regression evidence.
+
+---
+
+## M26: adapter-owned Qwen variant classification — 2026-08-11
+
+### Run identity
+
+- Regression parent: `aeb87efcd055774d8263dac0b31d9d25933b8a98`.
+- Candidate commit: `9d3cc2fbd3ecbc2506e19218e9011eda3fbeff21`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Architecture contract SHA-256: `f65243e481a6f3a8d243a1feb6cfbf514591783e101da99cde256d38c93064fa`.
+- Qwen adapter SHA-256: `e3986dc4e487184e706d052916f0a81762da918680bb47cffc8ffb97356ebe2e`.
+- Architecture audit SHA-256: `ffbad616eeb5635eceb5ff9d015cea59a07c3125d2cd55248ef03320ebf004fd`.
+- Candidate diff SHA-256: `6d25e8cbeb13b3df0f11b857445879409fb8f8498475201179a64932f2af5aa3`.
+- Reports md5: quant `c991619acfbc94973d8075033f33d752`, standard
+  `3e716d369c994f4b25d539fce1577b1d`, DFlash
+  `685224d67f49a39893a9ea45ae92c0b8`, agentic
+  `edfd83c0b79e92e020a9ce33679cca53`.
+- Full gate: `/tmp/hipfire-integration-row67/summary.md`.
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1270.7 | 1279.6 | 1265.6 | 1270.7 |
+| 4B MQ4 decode tok/s | 140.9 | 140.8 | 140.8 | 139.8 | 140.8 |
+
+### Decision
+
+- The architecture contract now classifies supported family members as dense
+  or MoE, and Qwen3.5 owns the mapping for IDs 5 and 6.
+- DFlash MQ3 admission consumes the adapter capability instead of duplicating
+  `arch_id == 5` in the daemon. Current dispatch behavior is unchanged.
+- Full CPU and GPU0 gates pass. Medians change +0.03%/+0.72% from M25 and
+  remain +3.54%/-0.07% versus the committed floor; no five-run expansion was
+  required.
+- Generated outputs were manually reviewed as on-topic and non-looping; all
+  speculative detectors are clean and agentic reports zero warnings.
+- Decision: accept row 67 as a cold-path adapter-ownership correction with
+  MIT-boundary, quality, and performance non-regression evidence.
