@@ -2146,3 +2146,45 @@ layers, four KV heads, `head_dim=256`, and physical capacity 2,048.
   hard failures and zero soft warnings.
 - Decision: accept row 62 as a generation-semantics correction with full
   MIT-boundary, speculative-quality, and performance evidence.
+
+---
+
+## M22: adapter-owned PFlash family checks — 2026-08-11
+
+### Run identity
+
+- Regression parent: `23f1a8ac841cd184e3d24b69b0f712c5ab3762df`.
+- Candidate commit: `b0d8ebc3f550fb2dc362dd70ab860968aff97cbe`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- PFlash loader SHA-256: `4d0ea703e5de33060cb792efb13d2f36898a18819d8b1339a7b8f0ffa21e4359`.
+- PFlash demo SHA-256: `9f2d148a62919e9acfb25779389d752cc1ff5ab81c2594a37640ae5bada4dd3b`.
+- Adapter audit SHA-256: `8b0c045771d2f37ca685f7a9e49042c44f69ac19a08b18e72d0e62f0e2b71434`.
+- Candidate diff SHA-256: `a8a3027420dd609e3f8ca47d1829e3eb9326585862b22c2a5780f5355a8cdfc1`.
+- Reports md5: quant `514825986154fed3b3a80b34490320d9`, standard
+  `c1f5ed00a495ac57ee1512d491960ce5`, DFlash
+  `b5346b7e102e523837f3e16f7419b291`, agentic
+  `66e124ec2521d19ea206084613f8bb0a`.
+- Full gate: `/tmp/hipfire-integration-row63/summary.md`.
+
+### Standard GPU measurements
+
+| Metric | Floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1298.8 | 1327.1 | 1362.2 | 1327.1 |
+| 4B MQ4 decode tok/s | 140.9 | 140.2 | 139.3 | 139.8 | 139.8 |
+
+### Decision
+
+- Production and demo PFlash loaders delegate Qwen3.5 family ownership to the
+  adapter instead of duplicating architecture IDs.
+- Full CPU and GPU0 gates pass. Medians change +1.87%/-0.50% from M21 and
+  remain +8.13%/-0.78% versus the committed floor.
+- A supplemental 27B MQ4 PFlash run preserved all six historical PFlash PASS
+  verdicts and improved four historical baseline-mode FAIL verdicts. Its
+  absolute timings are not compared with the unavailable 27B MQ3 baseline.
+- Generated outputs were manually reviewed; standard and DFlash/DDTree output
+  is coherent, all speculative detectors are clean, and agentic reports zero
+  hard failures and zero soft warnings.
+- Decision: accept row 63 as a cold-path model-adapter ownership correction
+  with full MIT-boundary, quality, and performance non-regression evidence.

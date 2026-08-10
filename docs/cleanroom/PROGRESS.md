@@ -1158,3 +1158,38 @@ The conservative direction-table position is now complete through row 62 of
 2706; row 63 is next. The remaining direction count is 2644. Direction rows
 remain audit inputs aggregated into independently specified implementation
 batches, not a promise of one Git commit per row.
+
+## M22 evidence
+
+### Adapter-owned PFlash family checks
+
+Direction row 63 continues isolating model-family differences behind the
+architecture adapter. Commit `b0d8ebc` removes the PFlash loader's duplicated
+Qwen3.5 architecture-ID comparison in both the production path and its load
+demo. They now ask the Qwen3.5 adapter whether the HFQ family is supported, so
+future family changes have one owner. The architecture audit rejects a return
+to hard-coded family checks in either consumer. This is a cold-path ownership
+change and does not alter PFlash kernels, model math, or scheduling.
+
+The recorded PFlash timing baseline requires a 27B MQ3 target that is not
+present on this host. A GPU0 supplemental run therefore used the available
+27B MQ4 target with the same 0.8B MQ4 drafter. All twelve fixture executions
+returned PASS: all six historical PFlash PASS verdicts stayed PASS, and the
+four baseline-mode historical FAIL verdicts improved to PASS. The gate's
+mechanical exit was nonzero because it treats any verdict flip as a change and
+because two MQ4 observations were more than 10% faster than the MQ3 timing
+record. Those cross-format absolute timings are intentionally not accepted as
+a performance comparison and the committed MQ3 baseline was not modified.
+
+The full workspace, MIT checks, eleven-cell quant parity, standard coherence,
+four DFlash/DDTree cells, and Qwen3.6 27B agentic cell pass on GPU0. Manual
+review found coherent bounded output, clean speculative detectors, valid
+tool-call JSON, and zero agentic warnings. Three fresh performance processes
+measure 1,298.8, 1,327.1, and 1,362.2 prefill tok/s and 140.2, 139.3, and
+139.8 decode tok/s. Medians are 1,327.1 and 139.8 tok/s, changing by +1.87%
+and -0.50% from M21, so no five-run expansion was required.
+
+The conservative direction-table position is now complete through row 63 of
+2706; row 64 is next. The remaining direction count is 2643. Direction rows
+remain audit inputs aggregated into independently specified implementation
+batches, not a promise of one Git commit per row.
