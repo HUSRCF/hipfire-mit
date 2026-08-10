@@ -18,6 +18,7 @@ related mechanism; it must have an explicit requirement, test, and evidence.
 | M2: release and device execution | 10-18 | in progress | reproducible delivery and the device-execution foundation are complete; remaining quantization, maintenance, and integration directions are still open |
 | M3: quantization and context paths | 19-43 | in progress | strict HFQ boundaries and quant-payload layouts, ten-cell GPU/CPU quant parity gating including MQ8/MQ4, a reproducible MQ8 scalar-dot negative experiment, shared packed-KV allocation, and checked long-context position continuity are complete; full model-level format fidelity remains open |
 | M4: kernel fault localization | 44 | complete | deterministic kernel artifact provenance and staged compile/load/symbol failure context |
+| M5: clean-room composition | 45-46 | complete | one reproducible CPU/GPU integration gate, evidence manifest, fail-closed GPU selection, and mandatory generated-output review |
 
 ## M0 evidence
 
@@ -479,7 +480,55 @@ relative spread is 2.27%. The commit-hook repetition passes at 1369.9 and
 140.8 tok/s. No speedup is attributed to initialization-only diagnostics.
 Full evidence is in `docs/cleanroom/PERFORMANCE_RECORD.md`.
 
-The conservative direction-table position is now complete through row 44 of
-2706; row 45 is next. Direction rows are audit inputs and are aggregated into
-independently specified implementation batches, so the remaining 2662 rows
-are not a promise of 2662 one-to-one Git commits.
+## M5 evidence
+
+### Reproducible integration gate
+
+Direction rows 45-46 require independently developed work to be composed
+under regression control. The existing pre-commit hook deliberately selects
+checks by changed path, so it did not provide a single explicit proof that all
+currently active clean-room paths still compose.
+
+Commit `0567fb08e6800be837be786702e8ad3c1d9d028d` adds
+`scripts/cleanroom-integration-gate.sh` and a deterministic plan/self-check
+test. CPU mode combines the source diff check, full locked workspace all-target
+tests, locked workspace example checking, public-device binding audit,
+agentic-detector self-check, and MIT source/license gate. Full mode then runs
+the ten-cell quantization parity battery, standard and DFlash/DDTree coherence
+batteries, the fast agentic structure gate, and three to five fresh speed-gate
+processes. Every delegated GPU gate keeps its existing GPU lock.
+
+Full mode fails closed unless both ROCr and HIP visibility select the requested
+device; the accepted run selected device 0 for both. Every step has a separate
+log and the generated summary pins the candidate parent, branch, dirty-candidate
+diff hash, device visibility, ordered statuses, and report paths. A machine
+pass does not waive manual review of generated text.
+
+The complete GPU0 run passes all CPU steps, all ten quantization cases, four
+available standard coherence cells, all four DFlash/DDTree cells, and the
+Qwen3.6 27B agentic cell with zero hard failures and zero soft warnings.
+Generated outputs were manually reviewed: the two standard short-mode samples
+that end mid-answer are bounded-generation truncations, while all available
+text remains on-topic and free of loops or special-token corruption. The
+DFlash/DDTree prose and code are coherent and every detector reports
+`ok=true` and `soft_warn=false`; the agentic call is valid JSON and satisfies
+its schema.
+
+Three fresh GPU0 speed observations have medians 1282.1 prefill tok/s and
+140.8 decode tok/s, respectively +4.47% and -0.07% versus the committed W7900
+floor. Relative to M4's five-run medians they differ by +2.40% and +0.36%, so
+the cross-batch 5% expansion rule did not require two additional runs. This is
+composition non-regression evidence; the batch changes scripts only and no
+performance gain is attributed.
+
+PFlash is explicitly reported as skipped because the required local target and
+drafter models are absent; it is not counted as passing coverage. Runtime
+multi-GPU execution is also outside this GPU0-only acceptance run, while the
+existing multi-GPU device-binding static audit remains included. Full evidence
+is in `docs/cleanroom/PERFORMANCE_RECORD.md` and the run manifest at
+`/tmp/hipfire-integration-row45-46/summary.md`.
+
+The conservative direction-table position is now complete through row 46 of
+2706; row 47 is next. Direction rows are audit inputs and are aggregated into
+independently specified implementation batches, so the remaining 2660 rows
+are not a promise of 2660 one-to-one Git commits.

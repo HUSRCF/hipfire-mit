@@ -1070,3 +1070,66 @@ tok/s.
   repetition `/tmp/agentic-gate-20260810-110422.md`.
 - Decision row 44 is closed as a diagnostic capability: artifact provenance
   and failure stage can now be queried without changing inference semantics.
+
+---
+
+## M5: clean-room integration composition — 2026-08-10
+
+### Run identity
+
+- Regression parent: `503dfeb5c10c99fd4daf2ae106c184f403359e2f`.
+- Candidate implementation commit:
+  `0567fb08e6800be837be786702e8ad3c1d9d028d`.
+- GPU: Radeon Pro W7900 48GB, `gfx1100`, device 0 only.
+- ROCm/HIP: `7.14.60850-0000000`.
+- Integration-gate SHA-256:
+  `34b8b4fe5704351c61a7daf39dbc4e52c57da93210d4f60dd242a190fa9b5934`.
+- Plan-test SHA-256:
+  `8ff63919dc99dcccd7687814f371e99e7d7a17e0b6e9a99e5bb4983cf1b2e838`.
+- Candidate diff SHA-256 recorded by the run:
+  `69aad9ff021441d5e3e81c34d6779405d38a28061612bbe84ddf52685b219e2c`.
+- Candidate benchmark md5: `a9a5fe0b2c8b6e68a477bca6fc60d791`.
+- Candidate daemon md5: `eb74cf1ece190c3772ff9e11c60c3bcf`.
+- Rebuilt candidate DFlash md5: `f5f44dfe14f3c142b7716e8b05566d5f`.
+- Environment: GPU0-only visibility and the same ROCm 7.14 library,
+  model-directory, W7900 baseline, explicit speed-gate DPM warm-up, and
+  per-child `scripts/gpu-lock.sh` serialization used by the preceding runs.
+- Full command: `./scripts/cleanroom-integration-gate.sh --speed-runs 3
+  --out /tmp/hipfire-integration-row45-46` under the recorded environment.
+- Machine manifest:
+  `/tmp/hipfire-integration-row45-46/summary.md`.
+
+### Measurements
+
+| Metric | Committed floor | Observation 1 | Observation 2 | Observation 3 | Median |
+|---|---:|---:|---:|---:|---:|
+| 4B MQ4 pp32 prefill tok/s | 1227.3 | 1314.0 | 1282.1 | 1262.8 | 1282.1 |
+| 4B MQ4 decode tok/s | 140.9 | 141.1 | 140.8 | 140.3 | 140.8 |
+
+### Decision
+
+- Candidate median deltas are +4.47% prefill and -0.07% decode. Every
+  observation passes the committed 5% regression tolerance. Relative to M4's
+  five-run medians, the differences are +2.40% and +0.36%; neither crosses
+  the 5% expansion threshold.
+- Full locked workspace all-target tests and example checks pass. The source
+  diff, 381-public-function device-binding audit, multi-GPU binding static
+  audit, agentic-detector self-check, and clean-room source/license gate pass.
+- Unified GPU0 quant parity passes all ten cases. Report:
+  `/tmp/hipfire-integration-row45-46/quant-parity.md`.
+- Four locally available standard coherence cells pass machine checks and
+  manual review. Short-mode truncations are visible and not misclassified as
+  semantic corruption. Report:
+  `/tmp/hipfire-integration-row45-46/coherence.md`.
+- All four DFlash/DDTree cells report `ok=true` and `soft_warn=false`; prose
+  and code outputs were manually reviewed. Report:
+  `/tmp/hipfire-integration-row45-46/coherence-dflash.md`.
+- The Qwen3.6 27B agentic cell emits valid `name='read'` JSON with zero hard
+  failures and zero soft warnings. Report:
+  `/tmp/hipfire-integration-row45-46/agentic.md`.
+- PFlash is explicitly skipped because its required local model pair is
+  absent and is not presented as passing. Runtime multi-GPU execution is not
+  included in this GPU0-only batch; its binding static audit is included.
+- Decision: accept rows 45-46 as an independently specified integration
+  contract. The scripts-only candidate composes all active GPU0 regression
+  gates into one reproducible manifest and does not change inference code.
